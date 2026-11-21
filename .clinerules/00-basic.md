@@ -1,0 +1,4 @@
+Keep documentation concise, accurate, and consistent with the actual code. Avoid duplication: project memory (`docs/project-context.md`) is for evolving context, development docs (`docs/development.md`) for established knowledge, roadmap (`docs/roadmap.md`) for future possibilities, and `README.md` for the overall project overview.
+docs/project-context.md — Living project memory. Read at the start of every task and update at the end of every task. Record recent tasks, current state, important discoveries, gotchas, decisions, and reasoning.
+docs/development.md — Stable technical documentation. Describe architecture, development setup, conventions, workflows, and requirements. Update when established practices or implementation change.
+docs/roadmap.md — Central place for plans, ideas, improvements, potential features, and possible next steps. Capture opportunities discovered during tasks; distinguish ideas from committed plans.

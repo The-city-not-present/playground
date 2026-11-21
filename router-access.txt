@@ -1,0 +1,52 @@
+Router access cheatsheet
+========================
+Broken router (OpenWrt) IPv6 address:  fdf0:e5a3:3ca6::1
+Username (the only user on OpenWrt):  root
+
+--- Web (LuCI) ---
+Open in a browser on this machine:
+
+  http://[fdf0:e5a3:3ca6::1]/cgi-bin/luci/
+
+or over HTTPS (self-signed cert -> click through the browser warning):
+
+  https://[fdf0:e5a3:3ca6::1]/
+
+--- SSH (terminal) ---
+
+  ssh root@fdf0:e5a3:3ca6::1
+
+--- Just checking it's alive (terminal) ---
+
+  ping6 -c 3 fdf0:e5a3:3ca6::1
+
+--- Notes ---
+* Wrong passwords do NOT lock anything out. LuCI = unlimited tries.
+  SSH (dropbear) drops the connection after a few tries, but you can
+  just reconnect and keep trying.
+* The [ ... ] brackets around the IPv6 address are required in a URL.
+
+--- If you can't remember the password ---
+* OpenWrt failsafe mode: hold the reset button during boot, then we can
+  reset just the root password (keeps config).
+* Factory reset: hold the reset button while powered (or run `firstboot`),
+  wipes config to defaults.
+
+--- Change password & stop the upgrade popup ---
+Log in over SSH (use the same password you just used in LuCI):
+
+  ssh root@fdf0:e5a3:3ca6::1
+
+Change the root password:
+
+  passwd
+
+Stop the "check online for firmware upgrades" popup (Attended Sysupgrade
+checks on the Overview page, which auto-refreshes every ~5 seconds):
+
+  uci set attendedsysupgrade.@client[0].login_check_for_upgrades='0'
+  uci commit attendedsysupgrade
+
+(UI alternatives: password = System -> Administration -> Router Password;
+popup = System -> Attended Sysupgrade -> Configuration -> uncheck
+"Check for upgrades", then Save & Apply.)
