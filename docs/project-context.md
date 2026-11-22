@@ -7,6 +7,11 @@ happens on the Linux host `lenovo-Ideapad-Z560` (Linux Mint 22); privileged netw
 through the scoped-sudo `agent-proxy` helper (see `docs/development.md`).
 
 ## Current state — VERIFIED LIVE 2026-11-22
+- **Step 00 (clean baseline) — COMPLETE (2026-11-22).** Host `enp7s0` = `192.168.31.100/24`, link UP
+  with carrier; no `dnsmasq`/`tcpdump`/`tftpserver.py` running and UDP :69 is free (the stale
+  root-owned `tftpserver.py` needed `sudo pkill -f tftpserver.py` — the agent's scoped sudo can't do
+  this itself). Router confirmed in **U-Boot TFTP recovery** (LED blinking pink). → proceed to step 01.
+
 - The broken router is **NOT reachable** and is **NOT running OpenWrt**. It sits in **stock U-Boot
   TFTP recovery** (LED blinks pink continuously). The Ethernet link is UP (cable connected) but the
   router answers nothing — `192.168.1.1` and `192.168.31.1` are both 100 % loss, and there is no
@@ -61,6 +66,9 @@ through the scoped-sudo `agent-proxy` helper (see `docs/development.md`).
 - **`reflash-attempt-20261121/tftp-root/miwifi.bin` is NOT a stock image** — it is a byte-for-byte
   copy of the OpenWrt v2 initramfs renamed to `miwifi.bin`. Do not mistake it for stock firmware.
 - Orange LED ≠ bricked. **Blinking pink LED = U-Boot TFTP recovery** (waiting for DHCP+TFTP).
+  To enter recovery from power-off: hold **reset** while powering on → solid orange (~7 s) → blinking
+  orange (~4 s) → solid orange again → **blinking pink** after ~15 s total. Timing varies (observed
+  2 s–30 s), so keep holding reset until it turns pink.
 - Stale `dnsmasq`/`tftpserver.py` instances (and a leftover listener on UDP :69) have caused
   confusion before — stop them before each run.
 - `ip neigh replace ... nud permanent` degrades to STALE→FAILED under link flap; use
