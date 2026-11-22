@@ -208,21 +208,77 @@ Recovery runbook (all via agent-proxy; install first with `sudo ./nmcli-proxy/in
 5. Power-cycle holding reset ~10 s; success = TFTP DATA flows (no `who-has 192.168.31.1` stall).
 6. initramfs at 192.168.1.1 / fe80::cabf:4cff:fe9b:2c80%enp7s0 -> `sysupgrade -n` the v2 squashfs.
 
-## Current state (live, verified 2026-03-26)
+## Current state (live, verified 2026-11-22 16:00)
 - Host: `lenovo-Ideapad-Z560`, Linux Mint 22 (Wilma), NetworkManager.
 - Agent runs as non-privileged user `agent-instance-01` (uid 1002).
-- `nmcli-proxy` installed at `/usr/local/bin/nmcli-proxy` (wrapper around `nmcli`).
-  - Read-only subcommands work (`list`, `devices`, `show`).
-  - `doctor` now reports **OK**, but it checks the *wrong* user: it defaults to
-    `os.getlogin()` (= `andrej`) while the effective sudo user is `agent-instance-01`.
-    `sudo -n true` **still fails** ("a password is required"), so privileged nmcli
-    (`set-static`, `set-dhcp`, …) is still unavailable to the agent. The sudoers rule for
-    `agent-instance-01` is NOT installed.
+- `agent-proxy` **2.1.0** is installed at `/usr/local/bin/agent-proxy` (root-owned) and the
+  scoped sudoers rule `/etc/sudoers.d/agent-proxy` is **installed** (2026-11-22 07:24) — the
+  agent can drive privileged ip/dnsmasq/tcpdump ops via `sudo -n agent-proxy ...`. (The older
+  `/usr/local/bin/nmcli-proxy` wrapper is superseded by `agent-proxy`.)
 - Network now:
-  - `wlp6s0` (WiFi `ahome-60let-2-24`) = 192.168.9.x/24 (DHCP), gw 192.168.9.1 (working
-    OpenWrt, MAC `50:64:2b:e8:6c:bc`). Internet OK.
-  - `enp7s0` (Ethernet, RJ45 to the broken router) = **link UP** (carrier=1, 100 Mbps),
-    NM profile "Wired connection 1", now `192.168.2.206/24` via DHCP from the router.
+  - `wlp6s0` (WiFi `ahome-60let-2-24`) = 192.168.9.155/24 (DHCP), gw 192.168.9.1 (working
+    OpenWrt). Internet OK.
+  - `enp7s0` (Ethernet, RJ45 to the broken router) = **link UP** (carrier present), but NM
+    profile "Wired connection 1" is set to **manual `192.168.1.1/24`** (leftover from a
+    failsafe attempt). The broken router is **not answering** (no reply on
+    `fe80::cabf:4cff:fe9b:2c80%enp7s0`, no ARP neighbours) → consistent with U-Boot recovery
+    (blinking pink) or powered off. No stray dnsmasq/tcpdump running.
+  - ⚠ `enp7s0` = `192.168.1.1/24` must be cleaned up before recovery: it occupies the OpenWrt
+    initramfs/failsafe default and is not on the `192.168.31.x` recovery subnet.
+
+## Why the last task stopped (2026-11-22)
+- The previous session was interrupted when the laptop lost network (WiFi), breaking the SSH
+  pipe mid-task. Lesson: keep the critical TFTP→flash path entirely on Ethernet (`enp7s0`),
+  independent of WiFi/internet, and prefer non-interactive `agent-proxy` commands.
+- The main router was renumbered `192.168.1.x` → `192.168.9.x` (router 192.168.9.1, pool
+  192.168.9.0/24) so OpenWrt's fallback 192.168.1.1 no longer conflicts. (Done.)
+
+## TFTP recovery result (2026-11-22 17:00) — transfer WORKS now, but initramfs does NOT boot
+The ARP stall is **fixed**. Root cause: the `ip neigh add ... nud permanent` entry was being
+**flushed when the router's power-cycle dropped the Ethernet carrier** (Linux flushes all
+neighbour entries on link-down). Fix: a background loop re-asserting the entry every 1 s
+(`while true; do agent-proxy ip neigh-replace ... --nud permanent; sleep 1; done`).
+
+With that, the 23.05.6 v2 initramfs **fully downloaded for the first time ever** (capture
+`/tmp/recovery-tftp2.log`: 3938 × 1472-byte DATA + 1 × 445-byte final block, 3940 ACKs). Image
+verified valid: uImage magic OK, data CRC OK (`0xba60a655`), MIPS Linux kernel, load/entry
+`0x80001000`. Note: agent-proxy only serves `--tftp-root` under `/tmp`/agent-home, so the
+firmware was copied to `/tmp/tftp-root`.
+
+**BUT the router does not boot it.** After the transfer it stays **blinking pink**, emits no
+traffic (no real LAN MAC `c8:bf:4c:9b:2c:80`, no IPv6, no DHCP), and `dmesg` shows **no link
+flap** after 16:44:12 → U-Boot did NOT flash-and-reboot and did NOT boot; it returned to idle
+recovery. v1 vs v2 initramfs differ by only **2365 bytes** (same kernel, different DTB), so this
+is a **bootloader-level** issue, not an image/variant issue.
+
+Next (see docs/roadmap.md):
+- **Definitive: serial console (UART, 3.3 V, 115200)** to see why U-Boot doesn't boot `test.bin`.
+- **Test: force TFTP blocksize 512** (dnsmasq negotiated `blksize 1468`; some stock U-Boots
+  mis-assemble RAM with >512-byte blocks). Needs `--tftp-no-blocksize` (not exposed by
+  agent-proxy) or the standalone `tftpserver.py`.
+
+**Update (512-byte retest, 2026-11-22):** forced 512-byte blocks via the standalone
+`tftpserver.py` (`/tmp/recovery-tftp512.log`: 11291 × 516-byte DATA + 1 × 437-byte final block,
+11292 ACKs — full transfer). **Still does NOT boot** (silent, blinking pink, no reboot). So
+blocksize is NOT the cause. (Also found a `tftpserver.py` bug: it answers `ERROR EBADOP` to the
+final ACK because it breaks out without consuming it — harmless, since dnsmasq's clean
+termination in the 1468-byte run also failed to boot.)
+
+**CONCLUSION:** the stock U-Boot downloads `test.bin` (fully, at any blocksize) but does NOT
+boot it and does NOT flash it (no link-flap/reboot in `dmesg`). This blocks the
+TFTP→initramfs→sysupgrade path. Next: **serial console (UART 3.3 V, 115200)** to see why U-Boot
+won't boot, or revisit the recovery method (e.g. stock `miwifi.bin` restore via TFTP — this
+router has **no USB port**).
+
+**Final observation (2026-11-22 ~17:24, two-boot capture `/tmp/boot-final.log`):**
+- Boot WITHOUT reset (normal boot): link up 17:23:04, a brief PHY flap (17:23:07/08), then
+  **zero network traffic** — the broken 25.12.2 firmware hangs silently (solid orange LED).
+- Boot WITH reset (recovery): link up 17:24:11, DHCP at 17:24:18, full TFTP transfer
+  (11291 × 516-byte + 1 × 437-byte final block, 11292 ACKs) by 17:24:21, then **silence** —
+  U-Boot still does not boot `test.bin` and does not reboot. LED stays blinking pink.
+
+Session ended cleanly: dnsmasq + ARP keep-alive stopped; `tftpserver.py` (root) may still be on
+:69 → `sudo pkill -f tftpserver.py` to stop. Router left in recovery (blinking pink).
 
 ## Major discovery — the router is alive and reachable over IPv6
 The broken R4A is running **OpenWrt** and fully reachable via Ethernet/IPv6 (no IPv4 needed):
@@ -276,21 +332,17 @@ Because the real WAN is dead and WiFi is broken, repurposed **LAN1 as the WAN**:
 - `br-lan` now bridges **lan2 only** (laptop stays wired on lan2).
 - Kept LAN = 192.168.2.1/24 + DHCP. Router does NAT LAN→WAN once LAN1 has a cable.
 
-## Plan (next steps) — TFTP recovery (with ARP pre-seed), then clean re-flash
-1. User (root): set the Ethernet to the recovery subnet (no WiFi conflict):
-   `sudo ip addr flush dev enp7s0; sudo ip addr add 192.168.31.100/24 dev enp7s0; sudo ip link set enp7s0 up`
-2. User (root): start the **DHCP+TFTP** server (dnsmasq does both — a TFTP server alone is
-   NOT enough; the U-Boot must first get a DHCP lease):
-   `sudo dnsmasq --conf-file=/home/andrej/work/xiaomi-openwrt-restore/reflash/dnsmasq-recovery.conf --no-daemon`
-3. User (root): **pre-seed the ARP entry** so dnsmasq can send the TFTP DATA without ARP
-   (U-Boot does NOT answer ARP for 192.168.31.1 after its RRQ):
-   `sudo ip neigh replace 192.168.31.1 lladdr 82:73:78:2e:b6:69 nud permanent dev enp7s0`
-4. Power-cycle the router holding **reset ~10 s** (LED blinking = recovery). Watch the
-   dnsmasq log for `DHCPACK 192.168.31.1` then `dnsmasq-tftp: sent ... test.bin`.
-5. initramfs OpenWrt boots (RAM only, no flash write yet). Reach it via link-local IPv6
-   `fe80::cabf:4cff:fe9b:2c80%enp7s0` (or 192.168.1.1 — no conflict now that the main
-   router is on 192.168.9.x), then SCP +
-   `sysupgrade -n` the **23.05.6 v2 squashfs** image (see `reflash/INSTRUCTIONS.md`).
+## Plan (next steps) — TFTP recovery (corrected), then clean re-flash (see docs/roadmap.md)
+Full runbook (phases + exact commands) is in `docs/roadmap.md`. Summary:
+1. **Phase 0 — clean the host Ethernet.** `enp7s0` still holds a leftover manual `192.168.1.1/24`
+   (NM "Wired connection 1"); flush it and set `192.168.31.100/24` (via agent-proxy).
+2. **Phase 1 — TFTP-boot the v2 initramfs.** Pre-seed a **permanent** ARP entry with
+   `ip neigh del` + `ip neigh add ... nud permanent` (NOT `replace`) and verify `PERMANENT`;
+   run one dnsmasq (DHCP+TFTP); power-cycle holding reset ~10 s; success = TFTP DATA flows.
+3. **Phase 2 — clean-flash.** Reach initramfs over Ethernet (link-local IPv6 or 192.168.1.1),
+   `scp` the v2 squashfs (`d1bbbc98…`) and `sysupgrade -n` it.
+4. **Phase 3 — verify & configure.** `iw dev` (phy0+phy1), `dmesg | grep -i mt76`,
+   `cat /sys/class/net/wan/carrier`; then LAN → 192.168.2.1/24, `passwd`, WiFi.
 
 ## Downstream router (192.168.9.1) — reference, READ-ONLY (do not modify)
 User's main/working router (same HW: R4A Gigabit, ramips/mt7621), running

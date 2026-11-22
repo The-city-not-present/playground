@@ -103,12 +103,16 @@ It does NOT send a TFTP RRQ on its own — so a TFTP server alone is not enough;
 3. **Pre-seed the ARP entry (CRITICAL — without this the TFTP transfer stalls).** The router's
    U-Boot does **not** answer ARP for `192.168.31.1` after it sends the TFTP RRQ, so dnsmasq
    can't resolve that IP to a MAC and never sends the first DATA block. Give the kernel the
-   MAC up front (flush any stale entry first):
+   MAC up front with a **permanent** neighbour entry. Use `del` + `add` — **NOT** `replace`
+   (a `replace ... nud permanent` was observed to degrade to STALE→FAILED, re-ARPing and
+   stalling again). **Verify it prints `PERMANENT` before power-cycling:**
    ```
-   sudo ip neigh flush dev enp7s0
-   sudo ip neigh replace 192.168.31.1 lladdr 82:73:78:2e:b6:69 nud permanent dev enp7s0
+   sudo ip neigh del 192.168.31.1 dev enp7s0 2>/dev/null || true
+   sudo ip neigh add 192.168.31.1 lladdr 82:73:78:2e:b6:69 nud permanent dev enp7s0
+   ip neigh show dev enp7s0   # MUST print: 192.168.31.1 lladdr 82:73:78:2e:b6:69 PERMANENT
    ```
-   (The U-Boot recovery MAC `82:73:78:2e:b6:69` is stable across boots.)
+   (The U-Boot recovery MAC `82:73:78:2e:b6:69` is stable across boots. Do NOT run
+   `ip addr flush` / `ip link set down/up` after the `add` — they clear neighbours.)
 4. Power off the router, hold **reset**, power on, keep holding ~10 s until the LED starts
    blinking, then release. (Make sure dnsmasq is already running *before* the power-cycle —
    the DHCP DISCOVER window is only ~28 s.) Watch the dnsmasq log:
