@@ -53,7 +53,7 @@ import textwrap
 import traceback
 from typing import List, Optional, Sequence, Tuple
 
-__version__ = "2.0.0"
+__version__ = "2.1.0"
 
 PROG = "agent-proxy"
 
@@ -71,6 +71,7 @@ TFTP_SCRIPT = "/usr/local/lib/agent-proxy/tftpserver.py"
 # Linux interface names: 1-15 chars, alnum plus a small safe set, first char alnum.
 IFACE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,14}$")
 LEASE_RE = re.compile(r"^[0-9]+[smhdw]?$", re.IGNORECASE)
+MAC_RE = re.compile(r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
 
 DRY_RUN: bool = False
 
@@ -145,7 +146,9 @@ def tcpdump_path() -> str:
 
 
 def pkill_path() -> str:
-    return tool_path("pkill", PKILL_FALLBACK)
+    # pkill/pgrep are the same multi-call binary and dispatch on argv[0]: keep
+    # the "pkill" name so it *signals* processes instead of just listing them.
+    return shutil.which("pkill") or PKILL_FALLBACK
 
 
 def python_path() -> str:
@@ -309,6 +312,15 @@ def validate_ip(value: str, what: str) -> str:
     if addr.version != 4:
         raise NetworkHelperError(f"Only IPv4 is supported for {what}, got {value!r}.")
     return str(addr)
+
+
+def validate_mac(value: str) -> str:
+    value = (value or "").strip().lower()
+    if not MAC_RE.match(value):
+        raise NetworkHelperError(
+            f"Invalid MAC address {value!r}: expected 'aa:bb:cc:dd:ee:ff'."
+        )
+    return value
 
 
 def validate_dns(values: Sequence[str]) -> List[str]:
@@ -677,6 +689,52 @@ def ip_cmd_link_set(args: argparse.Namespace) -> int:
     return 0
 
 
+@privileged
+def ip_cmd_addr_add(args: argparse.Namespace) -> int:
+    dev = validate_iface(args.device)
+    address = validate_cidr(args.address)
+    run_privileged([ip_path(), "addr", "add", address, "dev", dev])
+    print(f"OK: added address {address} to {dev!r}.")
+    return 0
+
+
+@privileged
+def ip_cmd_addr_flush(args: argparse.Namespace) -> int:
+    dev = validate_iface(args.device)
+    run_privileged([ip_path(), "addr", "flush", "dev", dev])
+    print(f"OK: flushed addresses on {dev!r}.")
+    return 0
+
+
+@privileged
+def ip_cmd_neigh_add(args: argparse.Namespace) -> int:
+    dev = validate_iface(args.device)
+    address = validate_ip(args.address, "neighbour")
+    mac = validate_mac(args.lladdr)
+    run_privileged([ip_path(), "neigh", "add", address, "lladdr", mac, "nud", args.nud, "dev", dev])
+    print(f"OK: added neighbour {address} ({args.nud}) on {dev!r}.")
+    return 0
+
+
+@privileged
+def ip_cmd_neigh_replace(args: argparse.Namespace) -> int:
+    dev = validate_iface(args.device)
+    address = validate_ip(args.address, "neighbour")
+    mac = validate_mac(args.lladdr)
+    run_privileged([ip_path(), "neigh", "replace", address, "lladdr", mac, "nud", args.nud, "dev", dev])
+    print(f"OK: replaced neighbour {address} ({args.nud}) on {dev!r}.")
+    return 0
+
+
+@privileged
+def ip_cmd_neigh_del(args: argparse.Namespace) -> int:
+    dev = validate_iface(args.device)
+    address = validate_ip(args.address, "neighbour")
+    run_privileged([ip_path(), "neigh", "del", address, "dev", dev], ok_returncodes=(0, 1))
+    print(f"OK: deleted neighbour {address} on {dev!r}.")
+    return 0
+
+
 def register_ip(subparsers) -> None:
     p = subparsers.add_parser("ip", help="Inspect interfaces/neighbours/routes and toggle links.")
     sub = p.add_subparsers(dest="action", required=True, metavar="ACTION")
@@ -700,6 +758,34 @@ def register_ip(subparsers) -> None:
     q.add_argument("state", choices=["up", "down"], help="Desired link state.")
     q.set_defaults(func=ip_cmd_link_set)
 
+    q = sub.add_parser("addr-add", help="Assign an IPv4 address to an interface (privileged).")
+    q.add_argument("--device", required=True, help="Interface name.")
+    q.add_argument("--address", required=True, metavar="IP/PREFIX", help="IPv4 in CIDR notation, e.g. 192.168.31.100/24.")
+    q.set_defaults(func=ip_cmd_addr_add)
+
+    q = sub.add_parser("addr-flush", help="Remove all addresses from an interface (privileged).")
+    q.add_argument("--device", required=True, help="Interface name.")
+    q.set_defaults(func=ip_cmd_addr_flush)
+
+    q = sub.add_parser("neigh-add", help="Add a neighbour (ARP) entry (privileged).")
+    q.add_argument("--device", required=True, help="Interface name.")
+    q.add_argument("--address", required=True, metavar="IP", help="Neighbour IPv4 address.")
+    q.add_argument("--lladdr", required=True, metavar="MAC", help="Link-layer (MAC) address, e.g. aa:bb:cc:dd:ee:ff.")
+    q.add_argument("--nud", default="permanent", choices=["permanent", "noarp", "stale", "reachable"], help="Neighbour state (default: permanent).")
+    q.set_defaults(func=ip_cmd_neigh_add)
+
+    q = sub.add_parser("neigh-replace", help="Replace a neighbour (ARP) entry (privileged).")
+    q.add_argument("--device", required=True, help="Interface name.")
+    q.add_argument("--address", required=True, metavar="IP", help="Neighbour IPv4 address.")
+    q.add_argument("--lladdr", required=True, metavar="MAC", help="Link-layer (MAC) address, e.g. aa:bb:cc:dd:ee:ff.")
+    q.add_argument("--nud", default="permanent", choices=["permanent", "noarp", "stale", "reachable"], help="Neighbour state (default: permanent).")
+    q.set_defaults(func=ip_cmd_neigh_replace)
+
+    q = sub.add_parser("neigh-del", help="Delete a neighbour (ARP) entry (privileged).")
+    q.add_argument("--device", required=True, help="Interface name.")
+    q.add_argument("--address", required=True, metavar="IP", help="Neighbour IPv4 address.")
+    q.set_defaults(func=ip_cmd_neigh_del)
+
 
 # ===========================================================================
 # Tool: dnsmasq (scoped DHCP / TFTP / DNS server)
@@ -716,6 +802,10 @@ def dnsmasq_cmd_start(args: argparse.Namespace) -> int:
         "--bind-interfaces",
         f"--dhcp-range={lo},{hi},{lease}",
     ]
+    if args.authoritative:
+        argv.append("--dhcp-authoritative")
+    if args.no_dns:
+        argv.append("--port=0")
     if args.gateway:
         argv.append(f"--dhcp-option=3,{validate_ip(args.gateway, 'gateway')}")
     dns = validate_dns(args.dns or [])
@@ -758,6 +848,8 @@ def register_dnsmasq(subparsers) -> None:
     q.add_argument("--tftp-root", metavar="DIR", help="Also serve TFTP from this directory (enables dnsmasq's built-in TFTP).")
     q.add_argument("--no-daemon", action="store_true", help="Stay in the foreground (do not daemonize).")
     q.add_argument("--log-queries", action="store_true", help="Log DHCP/DNS queries.")
+    q.add_argument("--authoritative", action="store_true", help="Answer DHCP authoritatively (helps U-Boot recovery).")
+    q.add_argument("--no-dns", action="store_true", help="Disable the DNS server (port=0); serve DHCP/TFTP only.")
     q.set_defaults(func=dnsmasq_cmd_start)
 
     q = sub.add_parser("stop", help="Stop dnsmasq (privileged).")
@@ -796,6 +888,15 @@ def tcpdump_cmd_capture(args: argparse.Namespace) -> int:
     return 0
 
 
+@privileged
+def tcpdump_cmd_stop(args: argparse.Namespace) -> int:
+    proc = run_privileged([pkill_path(), "-TERM", "-x", "tcpdump"], ok_returncodes=(0, 1))
+    if proc is None:
+        return 0  # --dry-run already printed
+    print("OK: stopped tcpdump." if proc.returncode == 0 else "OK: tcpdump was not running.")
+    return 0
+
+
 def register_tcpdump(subparsers) -> None:
     p = subparsers.add_parser("tcpdump", help="Capture packets on an interface (privileged).")
     sub = p.add_subparsers(dest="action", required=True, metavar="ACTION")
@@ -810,6 +911,9 @@ def register_tcpdump(subparsers) -> None:
     q.add_argument("--link-header", action="store_true", help="Print link-layer headers (-e).")
     q.add_argument("--verbose", action="count", default=0, help="Increase verbosity (-v/-vv/-vvv).")
     q.set_defaults(func=tcpdump_cmd_capture)
+
+    q = sub.add_parser("stop", help="Stop any running tcpdump (privileged).")
+    q.set_defaults(func=tcpdump_cmd_stop)
 
 
 # ===========================================================================
@@ -939,9 +1043,12 @@ def build_parser() -> argparse.ArgumentParser:
             f"  {PROG} ip addr\n"
             f"  {PROG} ip neigh\n"
             f"  {PROG} ip link-set --device eth0 up\n"
+            f"  {PROG} ip addr-add --device eth0 --address 192.168.31.100/24\n"
+            f"  {PROG} ip neigh-add --device eth0 --address 192.168.31.1 --lladdr 82:73:78:2e:b6:69\n"
             f"  {PROG} dnsmasq start --interface eth0 --range 192.168.1.10,192.168.1.20,12h --boot openwrt.bin\n"
             f"  {PROG} dnsmasq stop\n"
             f"  {PROG} tcpdump capture --interface eth0 --expression 'port 67 or port 69' --count 50\n"
+            f"  {PROG} tcpdump stop\n"
             f"  {PROG} tftp serve --directory ~/firmware\n"
             f"  {PROG} sudoers      # print the sudoers rule to install\n"
             f"  {PROG} doctor       # verify the setup\n"

@@ -25,9 +25,15 @@ purpose: no compiled binaries, every privileged action is a visible invocation.
 | `agent-proxy ip neigh [--dev <if>]` | Show neighbour (ARP) table | no |
 | `agent-proxy ip route [--dev <if>]` | Show routes | no |
 | `agent-proxy ip link-set --device <if> up/down` | Bring a link up/down | yes |
+| `agent-proxy ip addr-add --device <if> --address <IP/PREFIX>` | Assign an IPv4 address to an interface | yes |
+| `agent-proxy ip addr-flush --device <if>` | Remove all addresses from an interface | yes |
+| `agent-proxy ip neigh-add --device <if> --address <IP> --lladdr <MAC> [--nud <state>]` | Add a neighbour (ARP) entry | yes |
+| `agent-proxy ip neigh-replace --device <if> --address <IP> --lladdr <MAC> [--nud <state>]` | Replace a neighbour (ARP) entry | yes |
+| `agent-proxy ip neigh-del --device <if> --address <IP>` | Delete a neighbour (ARP) entry | yes |
 | `agent-proxy dnsmasq start ...` | Start a scoped DHCP server | yes |
 | `agent-proxy dnsmasq stop` | Stop dnsmasq | yes |
 | `agent-proxy tcpdump capture ...` | Capture packets | yes |
+| `agent-proxy tcpdump stop` | Stop running tcpdump | yes |
 | `agent-proxy tftp serve --directory <dir>` | Serve a directory over TFTP | yes |
 | `agent-proxy sudoers` | Print the sudoers rule to install | no |
 | `agent-proxy doctor` | Verify environment and sudoers setup | no |
@@ -109,6 +115,9 @@ agent-proxy nmcli devices
 agent-proxy ip addr
 agent-proxy ip neigh
 agent-proxy ip link-set --device eth0 up
+agent-proxy ip addr-add --device eth0 --address 192.168.31.100/24
+agent-proxy ip neigh-add --device eth0 --address 192.168.31.1 --lladdr 82:73:78:2e:b6:69
+agent-proxy ip neigh --dev eth0      # verify it shows PERMANENT
 
 # set a static IP / switch back to DHCP
 agent-proxy nmcli set-static --device eth0 --address 192.168.1.10/24 --gateway 192.168.1.1 --dns 8.8.8.8
@@ -122,6 +131,7 @@ agent-proxy tftp serve --directory ~/firmware
 agent-proxy tcpdump capture --interface eth0 --expression 'port 67 or port 69' --count 50
 # stop the DHCP server
 agent-proxy dnsmasq stop
+agent-proxy tcpdump stop
 
 # preview what would run, without executing privileged commands
 agent-proxy --dry-run tcpdump capture --interface eth0 --count 50
