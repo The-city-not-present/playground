@@ -1,9 +1,125 @@
 # Project context memory
 
 ## Goal
-Restore access to a Xiaomi Router 4A **Gigabit** Edition (R4A, `xiaomi_mi-router-4a-gigabit`,
-ramips/mt7621) that was half-flashed to OpenWrt and left in an unknown state.
+Restore access to a Xiaomi Router 4A **Gigabit** Edition (R4A, ramips/mt7621) that was
+half-flashed to OpenWrt and left in an unknown state.
 Router label (via OCR): model R4A, MAC `24:CF:24:89:0E:D5`.
+
+> **CRITICAL (2026-11-21): the board is a V2, not v1.** The 5 GHz chip is `14c3:7663`
+> (**MT7663**). OpenWrt's image Makefile confirms: v1 bundles `kmod-mt76x2` (= MT7612 5G),
+> while **v2 bundles `kmod-mt7615e kmod-mt7663-firmware-ap`** (= MT7663 5G). The earlier
+> v1 firmware (25.12.2) was therefore the *wrong variant* — that is why 5G had "no driver"
+> (MT7663 unbound) and WiFi was broken. Correct image prefix:
+> `xiaomi_mi-router-4a-gigabit-v2`.
+
+## Current state (2026-11-21) — router in U-Boot TFTP recovery (blinking pink LED)
+The user attempted OpenWrt **failsafe** (hold reset ~10 s at power-on) but hit an IP conflict,
+so nothing answered on 192.168.1.1. The router is now in the stock **U-Boot TFTP recovery**
+mode, NOT failsafe and NOT normal OpenWrt. Verified live:
+- enp7s0 (Ethernet to router) link UP: carrier=1, 100 Mbps, but no IPv4/IPv6 answer:
+  - 192.168.1.1 → no reply (so NOT failsafe).
+  - `fe80::cabf:4cff:fe9b:2c80` and `fdf0:e5a3:3ca6::1` → no reply (so NOT normal OpenWrt).
+- LED = **blinking pink, non-stop** (30+ min) = U-Boot recovery waiting for a **DHCP** server
+  (it TFTPs `test.bin` only after it gets a DHCP lease — see update 3).
+- Host WiFi wlp6s0 still up (192.168.1.155/24 gw 192.168.1.1, main router). enp7s0 = no IP.
+
+### IP-conflict gotcha (the user's concern was correct)
+- OpenWrt **failsafe** LAN = **192.168.1.1** → collides with the main router + WiFi 192.168.1.x.
+  Two interfaces on 192.168.1.0/24 = routing ambiguity (that's why ping gave
+  "Destination Host Unreachable"). To use failsafe you MUST first `nmcli radio wifi off`
+  (or disconnect the main-router WiFi) so Ethernet is the only 192.168.1.x interface.
+- Stock **U-Boot TFTP recovery** = **192.168.31.1** (router) / **192.168.31.100** (host) →
+  NO conflict with the main router. This is the path to take now (no need to drop WiFi).
+
+### 2026-11-21 update — TFTP did NOT fire (no RRQ received)
+Host set enp7s0 = 192.168.31.100/24, TFTP server listening on :69, router power-cycled
+with reset held ~10 s → LED sequence unchanged (orange 5 s → orange blink → orange →
+~dozens of s → pink blink forever) and **no TFTP RRQ** ever arrived. So the router is NOT
+sending TFTP to 192.168.31.100 (either not in TFTP recovery, using a different server IP,
+or only using a specific LAN port). Next diagnostic: `tcpdump` on enp7s0 during boot to see
+exactly what (if anything) the router transmits, and try the other LAN port (lan1).
+
+### 2026-11-21 update 2 — the router is a DHCP client (not TFTP)
+`tcpdump -i enp7s0 -n -e` during boot shows the router broadcasting **DHCP DISCOVER**
+(`0.0.0.0.68 → 255.255.255.255.67`) every ~2 s, from MAC **`82:73:78:2e:b6:69`** — a
+locally-administered (fallback/random) MAC, NOT its normal `c8:bf:4c:9b:2c:80`. So the
+router is running a DHCP client (U-Boot recovery doing DHCP, or OpenWrt with an interface in
+`proto dhcp`) and waiting for an IP that never comes. Fix: serve DHCP (+TFTP) with dnsmasq —
+see `reflash/dnsmasq-recovery.conf` (run `sudo dnsmasq --conf-file=... --no-daemon`).
+Watch the log: DHCPACK → then either a TFTP RRQ (U-Boot → boots initramfs) or the router
+comes up at 192.168.31.1 (OpenWrt → reach it over SSH/HTTP).
+
+### 2026-11-21 update 3 — CONFIRMED U-Boot; recovery SUCCEEDED (DHCP → TFTP `test.bin`)
+Answering DHCP with dnsmasq completed the recovery. The router is **U-Boot** — NOT an OpenWrt
+fallback, NOT failsafe — and it only does TFTP *after* it gets a DHCP lease:
+
+1. **DHCP DISCOVER** `0.0.0.0.68 → 255.255.255.255.67` from MAC `82:73:78:2e:b6:69`
+   (locally-administered fallback MAC; host/laptop = `1c:75:08:61:17:51`). dnsmasq logged
+   **`vendor class: U-Boot`** — that is the definitive proof it's the bootloader, not Linux.
+   It requested options `1:netmask, 3:router, 6:dns-server, 12:hostname, 17:root-path`.
+   It broadcasts for a **~28 s one-shot window per boot** (intervals 0.25s→0.5s→1s→2s), then
+   goes silent while the LED keeps blinking pink. → dnsmasq must be running *before* the
+   power-cycle (the earlier TFTP-only attempt saw no RRQ for exactly this reason).
+2. dnsmasq `DHCPOFFER/ACK` handed it **192.168.31.1** (host = 192.168.31.100; `next server`/
+   `server name` = 192.168.31.100, `bootfile` = `test.bin`).
+3. Router ARPed `who-has 192.168.31.100`, then sent **`TFTP RRQ "test.bin"`**
+   (`octet`, `timeout 5`, `blksize 1468`) from `192.168.31.1:1981` → `192.168.31.100:69`.
+4. dnsmasq logged `dnsmasq-tftp: sent .../tftp-root/test.bin to 192.168.31.1`; tcpdump showed
+   the full 1472-byte DATA / 4-byte ACK transfer completing (final partial block).
+
+**Key takeaway:** a TFTP server alone is NOT enough. The R4A U-Boot recovery is a **DHCP
+client** that learns its IP + TFTP-server + bootfile from the DHCP reply, *then* pulls
+`test.bin`. One command does both:
+`sudo dnsmasq --conf-file=reflash/dnsmasq-recovery.conf --no-daemon`.
+
+**Where it ended (session hit the 1M-token context limit):** the initramfs
+(`openwrt-25.12.6-...-initramfs-kernel.bin`, 7.4 MB) was served and the router went quiet
+(booting it from RAM). The session died before confirming the initramfs came up. Next step:
+give it ~1–2 min, then reach the initramfs OpenWrt and `sysupgrade -n` the squashfs image
+(see `reflash/INSTRUCTIONS.md`):
+- initramfs OpenWrt default LAN = **192.168.1.1** (empty root pw) — collides with the main
+  router, so drop WiFi (`nmcli radio wifi off`) or use link-local IPv6
+  `ssh root@fe80::cabf:4cff:fe9b:2c80%enp7s0`.
+- Gotcha seen at that moment: enp7s0 had **no IPv6/link-local on the host**, so
+  `ping6 fe80::cabf:4cff:fe9b:2c80` = 100% loss and ULA was unreachable — bring up the host's
+  IPv6 (or use 192.168.1.x) before probing.
+
+### TFTP recovery assets (already prepared)
+- `reflash/tftpserver.py` — minimal read-only TFTP server, binds UDP :69 (needs root).
+- `reflash/tftp-root/` — the initramfs uImage copied to `test.bin`, `miwifi.bin`,
+  `initramfs.bin`, and the full `.bin` name (so any U-Boot filename request is served).
+
+### 2026-11-21 update 4 — 25.12.6(v1) initramfs did NOT boot; switched to 23.05.6 v2
+- The 25.12.6 v1 initramfs (`test.bin`, served 17:41) never came up: router stayed in
+  U-Boot recovery (still blinking pink, no new DHCP lease after 17:41, no ARP answer on
+  192.168.1.1). Image itself verified intact (uImage header + data CRC OK) — so the boot
+  failed, not the transfer/image.
+- Switched `reflash/tftp-root/*` to the **23.05.6 v2 initramfs** (kernel 5.15.189, the
+  proven series + correct v2 variant), sha256 `61920cdf…` verified. v2 squashfs sysupgrade
+  (`d1bbbc98…`) also downloaded + verified.
+
+### 2026-11-21 update 5 — ROOT CAUSE FOUND: TFTP stalls on ARP (initramfs never downloads)
+Captured recovery cycle (`reflash/recovery-tftp.txt`) shows the TFTP transfer NEVER starts:
+- Router sends `TFTP RRQ "test.bin"` from `192.168.31.1:2053` → host `:69`.
+- dnsmasq must send the first DATA block to `192.168.31.1`, so the kernel ARPs
+  `who-has 192.168.31.1` — but the router's **U-Boot does NOT answer ARP** after the RRQ.
+- So no DATA is ever sent; the router just sits blinking pink.
+
+This means the initramfs was **never actually downloaded on any attempt** (the earlier
+"transfer completed" note in update 3 was wrong). Root cause = dnsmasq can't resolve
+`192.168.31.1 → MAC` and its ARP probes go unanswered. Fix = pre-seed the neighbour entry so
+dnsmasq sends the TFTP DATA without needing ARP:
+```
+sudo ip neigh flush dev enp7s0
+sudo ip neigh replace 192.168.31.1 lladdr 82:73:78:2e:b6:69 nud permanent dev enp7s0
+```
+(U-Boot recovery MAC `82:73:78:2e:b6:69` is stable across boots.)
+
+> The previous session disconnected right after recording this finding, so the fix commands
+> above were never delivered to the user. **Next step (unfinished):** apply the ARP pre-seed,
+> re-trigger recovery (dnsmasq running, hold reset + power on), and confirm with tcpdump that
+> TFTP DATA now flows and the initramfs comes up (192.168.1.1 / link-local
+> `fe80::cabf:4cff:fe9b:2c80%enp7s0`).
 
 ## Current state (live, verified 2026-03-26)
 - Host: `lenovo-Ideapad-Z560`, Linux Mint 22 (Wilma), NetworkManager.
@@ -73,12 +189,20 @@ Because the real WAN is dead and WiFi is broken, repurposed **LAN1 as the WAN**:
 - `br-lan` now bridges **lan2 only** (laptop stays wired on lan2).
 - Kept LAN = 192.168.2.1/24 + DHCP. Router does NAT LAN→WAN once LAN1 has a cable.
 
-## Plan (next steps)
-1. ✅ Root password known; ✅ LAN fixed to 192.168.2.1/24 + DHCP; ✅ LAN1-as-WAN applied.
-2. User: plug the main router's LAN cable into **LAN1** (the empty LAN port, NOT the blue
-   WAN). Then verify WAN gets 192.168.1.x and internet works (double-NAT).
-3. With internet, try to fix WiFi: `apk update && apk add kmod-mt7615e` (5G), investigate
-   2.4G driver crash (maybe newer kmod-mt7603/mt76). Then configure WiFi as "normal" AP.
+## Plan (next steps) — TFTP recovery (with ARP pre-seed), then clean re-flash
+1. User (root): set the Ethernet to the recovery subnet (no WiFi conflict):
+   `sudo ip addr flush dev enp7s0; sudo ip addr add 192.168.31.100/24 dev enp7s0; sudo ip link set enp7s0 up`
+2. User (root): start the **DHCP+TFTP** server (dnsmasq does both — a TFTP server alone is
+   NOT enough; the U-Boot must first get a DHCP lease):
+   `sudo dnsmasq --conf-file=/home/andrej/work/xiaomi-openwrt-restore/reflash/dnsmasq-recovery.conf --no-daemon`
+3. User (root): **pre-seed the ARP entry** so dnsmasq can send the TFTP DATA without ARP
+   (U-Boot does NOT answer ARP for 192.168.31.1 after its RRQ):
+   `sudo ip neigh replace 192.168.31.1 lladdr 82:73:78:2e:b6:69 nud permanent dev enp7s0`
+4. Power-cycle the router holding **reset ~10 s** (LED blinking = recovery). Watch the
+   dnsmasq log for `DHCPACK 192.168.31.1` then `dnsmasq-tftp: sent ... test.bin`.
+5. initramfs OpenWrt boots (RAM only, no flash write yet). Reach it via link-local IPv6
+   `fe80::cabf:4cff:fe9b:2c80%enp7s0` (or 192.168.1.1 with WiFi down), then SCP +
+   `sysupgrade -n` the **23.05.6 v2 squashfs** image (see `reflash/INSTRUCTIONS.md`).
 
 ## Downstream router (192.168.1.1) — reference, READ-ONLY (do not modify)
 User's main/working router (same HW: R4A Gigabit, ramips/mt7621), running
@@ -90,19 +214,24 @@ password `freedom2agents`; read-only via `sudo -n /usr/sbin/netadmin {status|log
   `8.8.8.8`/`8.8.4.4`) — this is the "static" config the user noticed.
 - WiFi works: 2.4G `ahome-60let-2-24`, 5G `ahome-60let-2-51`, WPA3 (`sae-mixed`).
 
-## Key insight → re-flash plan
-The working router (same HW) runs 23.05.x with **working WiFi (2.4G+5G) AND working WAN**.
-The broken router runs 25.12.2 with **crashed 2.4G driver + missing 5G driver + dead WAN**.
-Likely a 25.12.2 regression (or bad flash), not the factory partition (mtd3 is intact).
-**Plan: clean re-flash.** Files + instructions are in `reflash/`:
-- Primary: `openwrt-25.12.6-...-sysupgrade.bin` (newest stable, verified).
-- Fallback: `openwrt-23.05.6-...-sysupgrade.bin` (older series, verified).
-- Steps (see `reflash/INSTRUCTIONS.md`): SCP image to router over LAN, `sysupgrade -n`,
-  then reach via link-local `fe80::cabf:4cff:fe9b:2c80%enp7s0` (root pw empty after -n).
-- Caveat: if the WAN port is physically damaged, re-flash won't revive it; but it should
-  fix WiFi and is a good way to test the WAN.
+## Key insight → re-flash plan (UPDATED: use V2 images)
+The working router (same HW, but see v2 note) runs 23.05.x with **working WiFi (2.4G+5G) AND
+working WAN**. The broken router ran **25.12.2 v1** (wrong variant!) → 5G driver missing
+(MT7663 needs v2 build) + dead WAN. Root cause = wrong-variant firmware, not the factory
+partition (mtd3 is intact).
+**Plan: clean re-flash with the V2 images.** Files in `reflash/`:
+- Primary: `openwrt-23.05.6-...-xiaomi_mi-router-4a-gigabit-v2-squashfs-sysupgrade.bin`
+  (23.05.x = proven series; v2 = correct variant). Verified sha256 `d1bbbc98…`.
+- Recovery initramfs (served via TFTP): `...-v2-initramfs-kernel.bin` (verified `61920cdf…`).
+- Steps (see `reflash/INSTRUCTIONS.md`): TFTP-boot the v2 initramfs, then `sysupgrade -n`
+  the v2 squashfs. Reach initramfs at 192.168.1.1 (empty pw) or link-local
+  `fe80::cabf:4cff:fe9b:2c80%enp7s0` (LAN MAC `c8:bf:4c:9b:2c:80` from factory, stable).
+- Caveat: WAN may still be physically dead; re-flash is the definitive test for WiFi.
 
 ## Gotchas
 - Orange LED on R4A can indicate boot/recovery (U-Boot) state, not necessarily bricked.
+- **Blinking pink LED, non-stop** = U-Boot TFTP recovery waiting for a file (not bricked,
+  not failsafe). Give it a TFTP server at 192.168.31.100.
 - R4A Gigabit uses an A/B dual-firmware layout; stock recovery = hold reset while powering
   on (U-Boot TFTP).
+- Failsafe = 192.168.1.1 (conflicts with main router); U-Boot recovery = 192.168.31.1 (safe).

@@ -1,0 +1,16 @@
+tcpdump: verbose output suppressed, use -v[v]... for full protocol decode
+listening on enp7s0, link-type EN10MB (Ethernet), snapshot length 262144 bytes
+18:59:23.146451 82:73:78:2e:b6:69 > ff:ff:ff:ff:ff:ff, ethertype IPv4 (0x0800), length 342: 0.0.0.0.68 > 255.255.255.255.67: BOOTP/DHCP, Request from 82:73:78:2e:b6:69, length 300
+18:59:23.156656 1c:75:08:61:17:51 > 82:73:78:2e:b6:69, ethertype IPv4 (0x0800), length 342: 192.168.31.100.67 > 192.168.31.1.68: BOOTP/DHCP, Reply, length 300
+18:59:23.156803 82:73:78:2e:b6:69 > ff:ff:ff:ff:ff:ff, ethertype IPv4 (0x0800), length 342: 0.0.0.0.68 > 255.255.255.255.67: BOOTP/DHCP, Request from 82:73:78:2e:b6:69, length 300
+18:59:23.162535 1c:75:08:61:17:51 > 82:73:78:2e:b6:69, ethertype IPv4 (0x0800), length 342: 192.168.31.100.67 > 192.168.31.1.68: BOOTP/DHCP, Reply, length 300
+18:59:23.180101 82:73:78:2e:b6:69 > ff:ff:ff:ff:ff:ff, ethertype ARP (0x0806), length 60: Request who-has 192.168.31.100 tell 192.168.31.1, length 46
+18:59:23.180131 1c:75:08:61:17:51 > 82:73:78:2e:b6:69, ethertype ARP (0x0806), length 42: Reply 192.168.31.100 is-at 1c:75:08:61:17:51, length 28
+18:59:23.180203 82:73:78:2e:b6:69 > 1c:75:08:61:17:51, ethertype IPv4 (0x0800), length 82: 192.168.31.1.2053 > 192.168.31.100.69: TFTP, length 40, RRQ "test.bin" octet timeout 5 blksize 1468
+18:59:28.275517 1c:75:08:61:17:51 > 82:73:78:2e:b6:69, ethertype ARP (0x0806), length 42: Request who-has 192.168.31.1 tell 192.168.31.100, length 28
+18:59:29.299488 1c:75:08:61:17:51 > 82:73:78:2e:b6:69, ethertype ARP (0x0806), length 42: Request who-has 192.168.31.1 tell 192.168.31.100, length 28
+18:59:30.323508 1c:75:08:61:17:51 > 82:73:78:2e:b6:69, ethertype ARP (0x0806), length 42: Request who-has 192.168.31.1 tell 192.168.31.100, length 28
+
+10 packets captured
+10 packets received by filter
+0 packets dropped by kernel

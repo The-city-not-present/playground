@@ -17,17 +17,34 @@ Unfortunately, my experiments with this were quite long ago... And I don't remem
 
 I am now a non-privileged user, as it should be normal... Let me know if any commands or commands with sudo are needed - I will assist and install. I am giving access to nmcli command through nmcli-proxy helper script, found in current folder.
 
-## Network setup
+## Timeline
 
-This is quite hard to understand for me, how to make all work alltogether. If I configure network interface to static access to router - no global internet, normal work is not possible.
-If I configure network interface to dhcp, I have internet, but no access to router - work is not possible. I tried to ask ai and it sounds it is possible to work with both interfaces at the same time but I am not sure, in details. I hope it is possible.
+Main router - xiaomi mi4a gigabit, re-flashed to openwrt back in times. I don't now exact date. Working fine. Conventionally assigning 192.168.1.x to devices in local network. Accessed through wifi.
 
-Existing interfaces - wifi can be used 
-`ahome-60let-2-24` is normally working regular internet connection, served through older openwrt at 192.168.1.1. This is 2.4G, there is a sister copy with "5" in name, for 5G. I think both are equally fine, or 5G for some reason was looking less stable... But basically both can be used.
+The router that is not working now - bought second hand. I don't know the date, I see a log record Aug 2024.
 
-NITKA-WORK-VPN-2G (or same 5G) is also available but should not be used
+When bought, it was working perfectly fine, with original chinese formware. Perfectly fast, wifi, wan - all was working. Nothing indicated physical issue.
 
-Then, the RJ45 connection is currently plugged to router.
+Then, I tried to re-flash it to openwrt. I was able to get in, upload the image - I think this one but I am not sure /home/andrej/work/mi4a/openwrt-25.12.2-ramips-mt7621-xiaomi_mi-router-4a-gigabit-squashfs-sysupgrade.bin
 
-So, I hope both connections can be used at the same time, but I can't be sure.
+Result - not working fine. Permanent orange led indicator. Struggled to configure networking. Tried to change address range to 129.168.2.x so that it is not conflicting with main router. From this point, lost access.
+
+Then, Activities Nov 20. Prepared this folder `/home/andrej/work/xiaomi-openwrt-restore`, started agentic work. Agent was able to get in super quickly. I changed password to "freedom2agents". Then, I asked to verify config. Agent (deepseek v4 pro with higher reasoning) did not report any issues. I asked to configure network, wifi... There were certain problems with WAN. Something was not working. We tried to reconfigure to use LAN as WAN, and wifi for access. And we realized: 1. no events ever captured in WAN, cable is not visible, 2. wifi drivers crash, 3. permanent orange led. This means, need a new re-flash.
+
+So, I asked agent to prepare a plan in this folder `/home/andrej/work/xiaomi-openwrt-restore/reflash`.
+
+And then my next request was to go ahead with the plan.
+
+Agent tried to roll 25.x firmware -> not worked. Then, tried 23.x as it was confirmed to be working on main router -> not worked. Agent said it's probably the chip is v2 but the image was for v1...
+
+So, after it all, current state: unknown.
+
+Typical behavior on boot: permanent orange led.
+
+Typical behavior on boot with reset button - permanent orange for approx 5 seconds, then orange blinking, then permanent orange for maybe 10 seconds, and then pink blinking.
+
+Current topology: I have lenovo laptop connected to internet (to main router) via wifi. The problematic router is connected to lenovo with rj45 from lan. Also, a rj45 cable is going from main router lan to problematic router wan (blue).
+
+Please be aware of possible conflict: main router, that serves at wifi, assigns 192.168.1.x ips to devices from local network. Openwrt in recovery will still use 192.168.1.1. Accessing both from lenovo, through wired and wireless connection - not sure how much of a problem is it.
+
 
