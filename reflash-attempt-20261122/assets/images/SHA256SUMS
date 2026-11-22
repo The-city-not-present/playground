@@ -1,0 +1,7 @@
+# Verified 2026-11-22. Verify before flashing: sha256sum -c SHA256SUMS
+07d3cead22e3c4fbe98eec29de5d5bea8dad12ade931179972ee56d2ac249060  miwifi_r4a_firmware_72d65_2.28.62.bin
+609b5b59b7b00365451fa358b5a79e0e4078b8a9a7aeb6a994a641287a093548  miwifi_r4a_all_03233_3.0.24_INT.bin
+d1bbbc980e772fa22a099975ce2ade58693f0cddcb80be6e87c80abf5f22b37f  openwrt-23.05.6-ramips-mt7621-xiaomi_mi-router-4a-gigabit-v2-squashfs-sysupgrade.bin
+# MD5 (for cross-check with the OpenWRTInvasion README):
+#   a3db7f937d279cf38c2a3bec09772d65  miwifi_r4a_firmware_72d65_2.28.62.bin
+#   9c4a60addaad76dc13b6df6b4ac03233  miwifi_r4a_all_03233_3.0.24_INT.bin

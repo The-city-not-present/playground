@@ -9,8 +9,8 @@ OpenWRTInvasion and flash OpenWrt v2 properly.
 
 ## Requires
 - A stock firmware image in `assets/images/`:
-  - `miwifi_r4a_firmware_72d65_2.28.62.bin` (China 2.28.62) — sha256 `a3db7f937d279cf38c2a3bec09772d65`
-  - `miwifi_r4a_all_03233_3.0.24_INT.bin` (global 3.0.24) — md5 `9c4a60addaad76dc13b6df6b4ac03233`
+  - `miwifi_r4a_firmware_72d65_2.28.62.bin` (China 2.28.62) — MD5 `a3db7f937d279cf38c2a3bec09772d65`, SHA256 `07d3cead22e3c4fbe98eec29de5d5bea8dad12ade931179972ee56d2ac249060`
+  - `miwifi_r4a_all_03233_3.0.24_INT.bin` (global 3.0.24) — MD5 `9c4a60addaad76dc13b6df6b4ac03233`, SHA256 `609b5b59b7b00365451fa358b5a79e0e4078b8a9a7aeb6a994a641287a093548`
   Both are the **vulnerable** versions OpenWRTInvasion targets.
 - Baseline from step 00.
 
