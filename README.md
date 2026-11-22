@@ -75,13 +75,28 @@ bundled `tftpserver.py` to `/usr/local/lib/agent-proxy/`, and writes a scoped
 `/etc/sudoers.d/agent-proxy` rule for the user that invoked `sudo`, validating
 it with `visudo` first.
 
+To install for an agent that **cannot run `sudo` itself** (the common case for
+an automation account), have an admin run the installer with `--user`:
+
+```sh
+sudo ./install.sh --user agent
+```
+
+This grants the passwordless sudoers rule to `agent` instead of the admin who
+invoked `sudo`, and validates that `agent` is an existing local account before
+installing anything. The rule always points at the installed
+`/usr/local/bin/agent-proxy`; you can eyeball its shape ahead of time with
+`agent-proxy sudoers --user agent` (run from a checkout this prints the
+checkout path, but the shape — one `NOPASSWD` line scoped to the proxy — is the
+same).
+
 ### Option B: manual
 
 ```sh
 sudo install -o root -g root -m 0755 ./agent-proxy /usr/local/bin/agent-proxy
 sudo install -d -o root -g root -m 0755 /usr/local/lib/agent-proxy
 sudo install -o root -g root -m 0644 ./tftpserver.py /usr/local/lib/agent-proxy/tftpserver.py
-sudo sh -c 'agent-proxy sudoers > /etc/sudoers.d/agent-proxy && chmod 0440 /etc/sudoers.d/agent-proxy && visudo -c -f /etc/sudoers.d/agent-proxy'
+sudo sh -c 'agent-proxy sudoers --user agent > /etc/sudoers.d/agent-proxy && chmod 0440 /etc/sudoers.d/agent-proxy && visudo -c -f /etc/sudoers.d/agent-proxy'
 agent-proxy doctor
 ```
 

@@ -1,11 +1,50 @@
 #!/usr/bin/env bash
 #
 # Install agent-proxy (and its bundled tftpserver.py) to /usr/local and install
-# a scoped sudoers rule for the user that invoked sudo. Run as root:
+# a scoped sudoers rule for the given user. Run as root:
 #
-#   sudo ./install.sh
+#   sudo ./install.sh                 # grant to the user that invoked sudo
+#   sudo ./install.sh --user agent    # grant to another (non-sudo) user
 #
 set -euo pipefail
+
+usage() {
+  cat >&2 <<'EOF'
+Usage: sudo ./install.sh [--user <username>]
+
+Options:
+  -u, --user <username>   Grant the agent-proxy sudoers rule to <username>
+                          (default: the user that invoked sudo, i.e. SUDO_USER).
+  -h, --help              Show this help.
+
+Use --user when the automation agent cannot run sudo itself; an admin runs
+this installer once on its behalf.
+EOF
+}
+
+TARGET_USER=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -u|--user)
+      if [[ $# -lt 2 || -z "${2:-}" ]]; then
+        echo "ERROR: --user requires a username argument." >&2
+        usage
+        exit 1
+      fi
+      TARGET_USER="$2"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "ERROR: unknown argument: $1" >&2
+      usage
+      exit 1
+      ;;
+  esac
+done
 
 if [[ ${EUID} -ne 0 ]]; then
   echo "ERROR: run this installer as root:  sudo ./install.sh" >&2
@@ -24,10 +63,23 @@ for f in agent-proxy tftpserver.py; do
   fi
 done
 
-INVOKER="${SUDO_USER:-}"
-if [[ -z "${INVOKER}" ]]; then
-  echo "ERROR: SUDO_USER is not set; run via 'sudo ./install.sh' so we know which user to grant privileges to." >&2
+if [[ -n "${TARGET_USER}" ]]; then
+  INVOKER="${TARGET_USER}"
+else
+  INVOKER="${SUDO_USER:-}"
+  if [[ -z "${INVOKER}" ]]; then
+    echo "ERROR: SUDO_USER is not set; run via 'sudo ./install.sh' or pass --user <username>." >&2
+    exit 1
+  fi
+fi
+
+if ! id -u "${INVOKER}" >/dev/null 2>&1; then
+  echo "ERROR: user '${INVOKER}' does not exist on this system." >&2
   exit 1
+fi
+
+if [[ "${INVOKER}" == "root" ]]; then
+  echo "WARNING: granting the sudoers rule to root is redundant (root needs no sudo rule)." >&2
 fi
 
 install -o root -g root -m 0755 "${SRC_DIR}/agent-proxy" "${DEST}"
