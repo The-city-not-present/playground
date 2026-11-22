@@ -10,7 +10,15 @@ through the scoped-sudo `agent-proxy` helper (see `docs/development.md`).
 - **Step 00 (clean baseline) — COMPLETE (2026-11-22).** Host `enp7s0` = `192.168.31.100/24`, link UP
   with carrier; no `dnsmasq`/`tcpdump`/`tftpserver.py` running and UDP :69 is free (the stale
   root-owned `tftpserver.py` needed `sudo pkill -f tftpserver.py` — the agent's scoped sudo can't do
-  this itself). Router confirmed in **U-Boot TFTP recovery** (LED blinking pink). → proceed to step 01.
+  this itself). Router confirmed in **U-Boot TFTP recovery** (LED blinking pink). → step 01 done.
+
+- **Step 01 (serve OpenWrt v2 initramfs) — COMPLETE, expected result confirmed (2026-11-22).** Served
+  `test.bin` (OpenWrt 23.05.6 v2 initramfs, sha256 `61920cdf…`) from a `/tmp` tftp-root via
+  `agent-proxy dnsmasq start` (scoped sudo can't run `sudo dnsmasq --conf-file=…`, and `--tftp-root`
+  is restricted to `/tmp`). Full DHCP→TFTP exchange confirmed: dnsmasq logged
+  `sent test.bin to 192.168.31.1` twice = **the full 5.78 MB transferred and was ACKed**, but U-Boot
+  **did not boot/flash it** (router stays in idle recovery, blinking pink). Unchanged from 20261121 →
+  proceed to **step 02** (serve stock `miwifi_r4a_*.bin`).
 
 - The broken router is **NOT reachable** and is **NOT running OpenWrt**. It sits in **stock U-Boot
   TFTP recovery** (LED blinks pink continuously). The Ethernet link is UP (cable connected) but the
@@ -71,5 +79,9 @@ through the scoped-sudo `agent-proxy` helper (see `docs/development.md`).
   2 s–30 s), so keep holding reset until it turns pink.
 - Stale `dnsmasq`/`tftpserver.py` instances (and a leftover listener on UDP :69) have caused
   confusion before — stop them before each run.
+- dnsmasq's TFTP **DATA blocks use ephemeral ports** (not :69), so a tcpdump filter of
+  `udp port 69` only shows the RRQ — it looks like the transfer "stalled". Use `udp or arp`
+  (or `host 192.168.31.1`) to see DATA/ACKs; dnsmasq logs `sent <file> to <ip>` only after a full
+  successful transfer.
 - `ip neigh replace ... nud permanent` degrades to STALE→FAILED under link flap; use
   `ip neigh del` + `ip neigh add ... nud permanent` and re-assert it on a 1 s loop.
