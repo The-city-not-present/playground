@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# Install nmcli-proxy to /usr/local/bin and install a scoped sudoers rule for
-# the user that invoked sudo. Run as root:
+# Install agent-proxy (and its bundled tftpserver.py) to /usr/local and install
+# a scoped sudoers rule for the user that invoked sudo. Run as root:
 #
 #   sudo ./install.sh
 #
@@ -13,13 +13,16 @@ if [[ ${EUID} -ne 0 ]]; then
 fi
 
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DEST="/usr/local/bin/nmcli-proxy"
-SUDOERS_FILE="/etc/sudoers.d/nmcli-proxy"
+DEST="/usr/local/bin/agent-proxy"
+LIB_DIR="/usr/local/lib/agent-proxy"
+SUDOERS_FILE="/etc/sudoers.d/agent-proxy"
 
-if [[ ! -f "${SRC_DIR}/nmcli-proxy" ]]; then
-  echo "ERROR: cannot find ${SRC_DIR}/nmcli-proxy" >&2
-  exit 1
-fi
+for f in agent-proxy tftpserver.py; do
+  if [[ ! -f "${SRC_DIR}/${f}" ]]; then
+    echo "ERROR: cannot find ${SRC_DIR}/${f}" >&2
+    exit 1
+  fi
+done
 
 INVOKER="${SUDO_USER:-}"
 if [[ -z "${INVOKER}" ]]; then
@@ -27,8 +30,12 @@ if [[ -z "${INVOKER}" ]]; then
   exit 1
 fi
 
-install -o root -g root -m 0755 "${SRC_DIR}/nmcli-proxy" "${DEST}"
+install -o root -g root -m 0755 "${SRC_DIR}/agent-proxy" "${DEST}"
 echo "installed ${DEST}"
+
+install -d -o root -g root -m 0755 "${LIB_DIR}"
+install -o root -g root -m 0644 "${SRC_DIR}/tftpserver.py" "${LIB_DIR}/tftpserver.py"
+echo "installed ${LIB_DIR}/tftpserver.py"
 
 tmp="$(mktemp)"
 trap 'rm -f "${tmp}"' EXIT

@@ -1,0 +1,1007 @@
+#!/usr/bin/env python3
+"""agent-proxy - a narrow, auditable wrapper around a fixed set of privileged
+network tools, so an *unprivileged* (agent) user can operate them without being
+given full root/sudo access.
+
+Tools: nmcli, ip, dnsmasq, tcpdump, tftp.
+
+Privilege model
+---------------
+This script normally runs as the unprivileged agent user. For privileged
+operations it re-executes *itself* under ``sudo -n`` (becoming root only for
+that one run), then runs the underlying tool with a *fixed, validated* argv
+list (absolute paths, never a shell string), so there is no shell-injection
+surface. The sudoers rule grants access to *this script only* -- never the
+underlying tools directly:
+
+    <user> ALL=(root) NOPASSWD: <this-script> *
+
+Why not per-tool rules? ``tcpdump`` (``-z``) and ``dnsmasq``
+(``--dhcp-script``) can spawn arbitrary commands, so a wildcard rule for either
+would be a privilege escalation. Granting sudo to this one root-owned,
+non-writable proxy keeps the only escalation surface in this file, where every
+operation is validated.
+
+Adding a new tool
+-----------------
+The file is organised into clearly separated sections, one per tool. Each
+section defines its validators, its privileged command builders, its
+``register_<tool>(subparsers)`` function and its command implementations. To
+append a tool: copy a section, wire its ``register_*`` call into
+``build_parser()`` and mark privileged commands with ``@privileged``.
+
+Error reporting philosophy
+--------------------------
+Fail early and loudly. Every expected failure reports the exact command line,
+the exit code and the original stdout/stderr (the original error is never
+swallowed). Unexpected exceptions always print the full Python traceback. Use
+``--traceback`` to get the traceback for expected failures as well.
+"""
+
+from __future__ import annotations
+
+import argparse
+import ipaddress
+import os
+import pwd
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+import textwrap
+import traceback
+from typing import List, Optional, Sequence, Tuple
+
+__version__ = "2.0.0"
+
+PROG = "agent-proxy"
+
+NMCLLI_FALLBACK = "/usr/bin/nmcli"
+IP_FALLBACK = "/usr/sbin/ip"
+DNSMASQ_FALLBACK = "/usr/sbin/dnsmasq"
+TCPDUMP_FALLBACK = "/usr/sbin/tcpdump"
+PKILL_FALLBACK = "/usr/bin/pkill"
+PYTHON_FALLBACK = "/usr/bin/python3"
+SUDO_FALLBACK = "/usr/bin/sudo"
+
+# tftpserver.py is installed alongside this proxy by install.sh.
+TFTP_SCRIPT = "/usr/local/lib/agent-proxy/tftpserver.py"
+
+# Linux interface names: 1-15 chars, alnum plus a small safe set, first char alnum.
+IFACE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,14}$")
+LEASE_RE = re.compile(r"^[0-9]+[smhdw]?$", re.IGNORECASE)
+
+DRY_RUN: bool = False
+
+
+class NetworkHelperError(Exception):
+    """A loud, structured error that preserves the original failure details."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        command: Optional[Sequence[str]] = None,
+        returncode: Optional[int] = None,
+        stdout: Optional[str] = None,
+        stderr: Optional[str] = None,
+    ) -> None:
+        super().__init__(message)
+        self.message = message
+        self.command = list(command) if command else None
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+    def __str__(self) -> str:
+        lines = [f"ERROR: {self.message}"]
+        if self.command:
+            lines.append(f"  command:   {format_argv(self.command)}")
+        if self.returncode is not None:
+            lines.append(f"  exit code: {self.returncode}")
+        if self.stdout and self.stdout.strip():
+            lines.append("  stdout:\n" + textwrap.indent(self.stdout.strip(), "    "))
+        if self.stderr and self.stderr.strip():
+            lines.append("  stderr:\n" + textwrap.indent(self.stderr.strip(), "    "))
+        return "\n".join(lines)
+
+
+def format_argv(argv: Sequence[str]) -> str:
+    return " ".join(shlex.quote(a) for a in argv)
+
+
+def current_user() -> str:
+    """Return the current login name, falling back to the passwd database."""
+    try:
+        return os.getlogin()
+    except OSError:
+        pass
+    return pwd.getpwuid(os.getuid()).pw_name
+
+
+def tool_path(name: str, fallback: str) -> str:
+    """Absolute, symlink-resolved path to a tool (consistent for sudoers)."""
+    found = shutil.which(name)
+    if not found:
+        return fallback
+    return os.path.realpath(found)
+
+
+def nmcli_path() -> str:
+    return tool_path("nmcli", NMCLLI_FALLBACK)
+
+
+def ip_path() -> str:
+    return tool_path("ip", IP_FALLBACK)
+
+
+def dnsmasq_path() -> str:
+    return tool_path("dnsmasq", DNSMASQ_FALLBACK)
+
+
+def tcpdump_path() -> str:
+    return tool_path("tcpdump", TCPDUMP_FALLBACK)
+
+
+def pkill_path() -> str:
+    return tool_path("pkill", PKILL_FALLBACK)
+
+
+def python_path() -> str:
+    return tool_path("python3", PYTHON_FALLBACK)
+
+
+def sudo_path() -> str:
+    return tool_path("sudo", SUDO_FALLBACK)
+
+
+def proxy_path() -> str:
+    return os.path.realpath(__file__)
+
+
+def agent_user() -> str:
+    """The unprivileged user on whose behalf we operate (even after elevating)."""
+    if os.geteuid() == 0:
+        sudo_user = os.environ.get("SUDO_USER")
+        if sudo_user:
+            return sudo_user
+    return current_user()
+
+
+def agent_home() -> str:
+    """Home directory of the agent user, robust across sudo re-exec."""
+    try:
+        return pwd.getpwnam(agent_user()).pw_dir
+    except KeyError:
+        return os.path.expanduser("~") or "/tmp"
+
+def run_command(argv: Sequence[str], *, ok_returncodes=(0,), stream: bool = False) -> subprocess.CompletedProcess:
+    """Run a command, capturing output by default; raise a loud error on failure.
+
+    ``stream=True`` inherits the caller's stdout/stderr (for long-running or
+    high-volume tools such as tcpdump / the TFTP server / dnsmasq).
+    """
+    argv = list(argv)
+    try:
+        if stream:
+            proc = subprocess.run(argv)
+            if proc.returncode not in ok_returncodes:
+                raise NetworkHelperError(
+                    f"Command exited with status {proc.returncode}.",
+                    command=argv,
+                    returncode=proc.returncode,
+                )
+            return subprocess.CompletedProcess(argv, proc.returncode, "", "")
+        proc = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    except FileNotFoundError as exc:
+        raise NetworkHelperError(f"Executable not found: {argv[0]!r}. Is it installed?", command=argv) from exc
+    except OSError as exc:
+        raise NetworkHelperError(f"Failed to start {argv[0]!r}: {exc}", command=argv) from exc
+
+    if proc.returncode not in ok_returncodes:
+        raise NetworkHelperError(
+            f"Command exited with status {proc.returncode}.",
+            command=argv,
+            returncode=proc.returncode,
+            stdout=proc.stdout,
+            stderr=proc.stderr,
+        )
+    return proc
+
+
+def run_privileged(argv: Sequence[str], *, ok_returncodes=(0,), stream: bool = False) -> Optional[subprocess.CompletedProcess]:
+    """Run a root-required command. Called only after main() has elevated us.
+
+    Under ``--dry-run`` nothing is executed; the command is printed instead and
+    ``None`` is returned.
+    """
+    if DRY_RUN:
+        print(f"[dry-run] would run: {format_argv(argv)}")
+        return None
+    return run_command(argv, ok_returncodes=ok_returncodes, stream=stream)
+
+
+def privileged(func):
+    """Mark a command as requiring root; main() re-execs under sudo if needed."""
+    func.requires_root = True  # type: ignore[attr-defined]
+    return func
+
+
+def _sudo_hint() -> str:
+    return (
+        "  hint: sudo refused to elevate this proxy non-interactively.\n"
+        f"        Install the sudoers rule: sudo sh -c '{PROG} sudoers > /etc/sudoers.d/{PROG} && chmod 0440 /etc/sudoers.d/{PROG} && visudo -c -f /etc/sudoers.d/{PROG}'\n"
+        f"        then verify with: {PROG} doctor"
+    )
+
+
+def _looks_like_sudo_refusal(stderr: str) -> bool:
+    low = (stderr or "").lower()
+    return "sudo" in low and any(
+        k in low for k in ("password", "not allowed", "no tty", "a terminal", "not in the sudoers")
+    )
+
+
+def _reexec_as_root() -> int:
+    """Re-run this very script under 'sudo -n'. Returns the child's exit code."""
+    cmd = [sudo_path(), "-n", proxy_path(), *sys.argv[1:]]
+    try:
+        # Inherit stdout for live streaming; capture stderr to detect a sudo refusal.
+        proc = subprocess.Popen(cmd, stdout=None, stderr=subprocess.PIPE, text=True)
+    except OSError as exc:
+        print(f"ERROR: could not re-exec as root: {exc}", file=sys.stderr)
+        return 2
+    assert proc.stderr is not None
+    err = proc.stderr.read()
+    proc.wait()
+    if err:
+        sys.stderr.write(err)
+    if proc.returncode != 0 and _looks_like_sudo_refusal(err):
+        print(_sudo_hint(), file=sys.stderr)
+    return proc.returncode
+
+# ---------------------------------------------------------------------------
+# Input validation (fail early, before any privileged action is attempted)
+# ---------------------------------------------------------------------------
+
+def validate_connection(name: str) -> str:
+    name = (name or "").strip()
+    if not name:
+        raise NetworkHelperError("Connection name must not be empty.")
+    if len(name) > 255:
+        raise NetworkHelperError(f"Connection name too long ({len(name)} > 255).")
+    if name.startswith("-"):
+        raise NetworkHelperError("Connection name must not start with '-'.")
+    if any(ord(c) < 32 or ord(c) == 127 for c in name):
+        raise NetworkHelperError("Connection name contains control characters.")
+    return name
+
+
+def validate_iface(name: str) -> str:
+    name = (name or "").strip()
+    if not IFACE_RE.match(name):
+        raise NetworkHelperError(
+            f"Invalid interface name {name!r}: expected 1-15 chars, e.g. 'eth0', "
+            "'wlp2s0', 'enp3s0'."
+        )
+    return name
+
+
+def validate_cidr(value: str) -> str:
+    try:
+        iface = ipaddress.ip_interface((value or "").strip())
+    except ValueError as exc:
+        raise NetworkHelperError(
+            f"Invalid IPv4 address/prefix {value!r}: expected CIDR notation like "
+            "'192.168.1.10/24'."
+        ) from exc
+    if iface.version != 4:
+        raise NetworkHelperError(f"Only IPv4 is supported, got {value!r}.")
+    return str(iface)
+
+
+def validate_ip(value: str, what: str) -> str:
+    try:
+        addr = ipaddress.ip_address((value or "").strip())
+    except ValueError as exc:
+        raise NetworkHelperError(f"Invalid {what} address {value!r}.") from exc
+    if addr.version != 4:
+        raise NetworkHelperError(f"Only IPv4 is supported for {what}, got {value!r}.")
+    return str(addr)
+
+
+def validate_dns(values: Sequence[str]) -> List[str]:
+    result: List[str] = []
+    for raw in values:
+        for part in (raw or "").split(","):
+            part = part.strip()
+            if part:
+                result.append(validate_ip(part, "DNS server"))
+    return result
+
+
+def validate_count(value: Optional[int]) -> int:
+    if value is None:
+        return 0
+    if value < 1:
+        raise NetworkHelperError(f"Count must be a positive integer, got {value}.")
+    return value
+
+
+def validate_snaplen(value: Optional[int]) -> int:
+    if value is None:
+        return 0
+    if value < 1 or value > 262144:
+        raise NetworkHelperError(f"Snapshot length must be 1-262144, got {value}.")
+    return value
+
+
+def validate_lease(value: str) -> str:
+    value = (value or "").strip()
+    if not LEASE_RE.match(value):
+        raise NetworkHelperError(
+            f"Invalid lease {value!r}: expected a duration like '12h', '30m', '1d', or seconds."
+        )
+    return value
+
+
+def validate_dhcp_range(value: str) -> Tuple[str, str, str]:
+    parts = [p.strip() for p in (value or "").split(",")]
+    if len(parts) not in (2, 3):
+        raise NetworkHelperError(
+            f"Invalid DHCP range {value!r}: expected 'lo,hi[,lease]' e.g. "
+            "'192.168.1.10,192.168.1.20,12h'."
+        )
+    lo = validate_ip(parts[0], "range start")
+    hi = validate_ip(parts[1], "range end")
+    lease = validate_lease(parts[2]) if len(parts) == 3 else "12h"
+    if int(ipaddress.ip_address(lo)) > int(ipaddress.ip_address(hi)):
+        raise NetworkHelperError(f"DHCP range start {lo} is greater than end {hi}.")
+    return lo, hi, lease
+
+
+def validate_bootfile(value: str) -> str:
+    value = (value or "").strip()
+    if not value:
+        raise NetworkHelperError("Boot file must not be empty.")
+    if "/" in value or "\\" in value or any(ord(c) < 32 for c in value):
+        raise NetworkHelperError(f"Invalid boot file {value!r}: use a bare filename (no path).")
+    if value.startswith("-"):
+        raise NetworkHelperError("Boot file must not start with '-'.")
+    return value
+
+def _allowed_writable_roots() -> List[str]:
+    """Directories the agent may write to / serve from.
+
+    Extend this list if you need to allow additional roots (e.g. a root-owned
+    ``/srv/tftp``). Keep it tight: these paths are writable by the agent, so
+    operations there cannot clobber system files.
+    """
+    return [os.path.realpath(agent_home()), os.path.realpath("/tmp")]
+
+
+def _within_roots(path: str, roots: Sequence[str]) -> bool:
+    return any(path == root or path.startswith(root + os.sep) for root in roots)
+
+
+def validate_writable_path(value: str) -> str:
+    """Validate an output file path (tcpdump -w): absolute, under an allowed
+    root, and not a symlink."""
+    value = (value or "").strip()
+    if not value:
+        raise NetworkHelperError("File path must not be empty.")
+    if not os.path.isabs(value):
+        raise NetworkHelperError(f"File path must be absolute, got {value!r}.")
+    if "\x00" in value or any(ord(c) < 32 for c in value):
+        raise NetworkHelperError("File path contains control characters.")
+    parent = os.path.dirname(value) or "/"
+    if not _within_roots(os.path.realpath(parent), _allowed_writable_roots()):
+        raise NetworkHelperError(
+            f"File path {value!r} must be under your home directory or /tmp."
+        )
+    if os.path.islink(value):
+        raise NetworkHelperError(f"File path {value!r} must not be a symlink.")
+    return value
+
+
+def validate_serve_directory(value: str) -> str:
+    """Validate a directory to serve over TFTP / DHCP boot: existing, absolute,
+    under an allowed root."""
+    value = (value or "").strip()
+    if not value:
+        raise NetworkHelperError("Directory must not be empty.")
+    if not os.path.isabs(value):
+        raise NetworkHelperError(f"Directory must be absolute, got {value!r}.")
+    if "\x00" in value or any(ord(c) < 32 for c in value):
+        raise NetworkHelperError("Directory contains control characters.")
+    real = os.path.realpath(value)
+    if not os.path.isdir(real):
+        raise NetworkHelperError(f"Directory {value!r} does not exist or is not a directory.")
+    if not _within_roots(real, _allowed_writable_roots()):
+        raise NetworkHelperError(
+            f"Directory {value!r} must be under your home directory or /tmp."
+        )
+    return real
+
+
+def validate_expression(value: str) -> str:
+    value = (value or "").strip()
+    if value.startswith("-"):
+        raise NetworkHelperError("Capture filter must not start with '-'.")
+    if "\x00" in value or any(ord(c) < 32 for c in value):
+        raise NetworkHelperError("Capture filter contains control characters.")
+    return value
+
+# ===========================================================================
+# Tool: nmcli (NetworkManager)
+# ===========================================================================
+
+def _active_connection_lines() -> List[str]:
+    proc = run_command(
+        [nmcli_path(), "-t", "-f", "DEVICE,NAME,UUID,STATE", "connection", "show", "--active"]
+    )
+    return proc.stdout.splitlines()
+
+
+def connection_for_device(dev: str) -> str:
+    """Resolve the active connection profile name for an interface."""
+    for line in _active_connection_lines():
+        parts = line.split(":", 3)
+        if len(parts) == 4 and parts[0] == dev and parts[3].strip() == "activated":
+            return parts[1]
+    raise NetworkHelperError(
+        f"No active connection found for device {dev!r}. "
+        f"Run '{PROG} nmcli list --active' to see active connections."
+    )
+
+
+def connection_is_active(conn: str) -> bool:
+    """True if the connection (matched by name *or* UUID) is currently active."""
+    for line in _active_connection_lines():
+        parts = line.split(":", 3)
+        if len(parts) == 4 and (parts[1] == conn or parts[2] == conn):
+            return parts[3].strip() == "activated"
+    return False
+
+
+def device_is_connected(dev: str) -> bool:
+    proc = run_command([nmcli_path(), "-t", "-f", "DEVICE,STATE", "device", "status"])
+    for line in proc.stdout.splitlines():
+        parts = line.split(":", 1)
+        if len(parts) == 2 and parts[0] == dev:
+            return parts[1].strip() in ("connected", "activated")
+    return False
+
+
+def resolve_connection(args: argparse.Namespace) -> str:
+    """Return a validated connection identifier from --connection/--device."""
+    if getattr(args, "connection", None):
+        return validate_connection(args.connection)
+    if getattr(args, "device", None):
+        return connection_for_device(validate_iface(args.device))
+    raise NetworkHelperError("Provide either --connection <id> or --device <iface>.")
+
+
+def _nmcli_priv(*argv: str) -> None:
+    run_privileged([nmcli_path(), *argv])
+
+
+def _activate(conn: str, wait: int) -> None:
+    _nmcli_priv("connection", "up", conn, "--wait", str(wait))
+
+
+def _down_then_up(conn: str, wait: int) -> None:
+    if connection_is_active(conn):
+        _nmcli_priv("connection", "down", conn)
+    _activate(conn, wait)
+
+
+def nmcli_cmd_list(args: argparse.Namespace) -> int:
+    argv = [nmcli_path(), "-t", "-f", "NAME,UUID,DEVICE,TYPE,STATE", "connection", "show"]
+    if args.active:
+        argv.append("--active")
+    proc = run_command(argv)
+    sys.stdout.write(proc.stdout)
+    return 0
+
+
+def nmcli_cmd_devices(args: argparse.Namespace) -> int:
+    proc = run_command([nmcli_path(), "-t", "device", "status"])
+    sys.stdout.write(proc.stdout)
+    return 0
+
+
+def nmcli_cmd_show(args: argparse.Namespace) -> int:
+    if args.connection:
+        argv = [nmcli_path(), "connection", "show", validate_connection(args.connection)]
+    else:
+        argv = [nmcli_path(), "device", "show", validate_iface(args.device)]
+    proc = run_command(argv)
+    sys.stdout.write(proc.stdout)
+    return 0
+
+@privileged
+def nmcli_cmd_set_static(args: argparse.Namespace) -> int:
+    conn = resolve_connection(args)
+    address = validate_cidr(args.address)
+    gateway = validate_ip(args.gateway, "gateway") if args.gateway else ""
+    dns = validate_dns(args.dns)
+    dns_arg = " ".join(dns) if dns else ""
+
+    _nmcli_priv(
+        "connection", "modify", conn,
+        "ipv4.method", "manual",
+        "ipv4.addresses", address,
+        "ipv4.gateway", gateway,
+        "ipv4.dns", dns_arg,
+    )
+    _activate(conn, args.wait)
+
+    summary = f"static {address}"
+    summary += f" gateway {gateway}" if gateway else " (no gateway)"
+    summary += f" dns {', '.join(dns)}" if dns else " (no dns)"
+    print(f"OK: set {conn!r} to {summary} and activated it.")
+    return 0
+
+
+@privileged
+def nmcli_cmd_set_dhcp(args: argparse.Namespace) -> int:
+    conn = resolve_connection(args)
+    _nmcli_priv(
+        "connection", "modify", conn,
+        "ipv4.method", "auto",
+        "ipv4.addresses", "",
+        "ipv4.gateway", "",
+        "ipv4.dns", "",
+    )
+    _activate(conn, args.wait)
+    print(f"OK: set {conn!r} to DHCP (ipv4.method=auto) and activated it.")
+    return 0
+
+
+@privileged
+def nmcli_cmd_renew(args: argparse.Namespace) -> int:
+    conn = resolve_connection(args)
+    _down_then_up(conn, args.wait)
+    print(f"OK: renewed DHCP on {conn!r} (down + up).")
+    return 0
+
+
+@privileged
+def nmcli_cmd_restart(args: argparse.Namespace) -> int:
+    if args.device:
+        dev = validate_iface(args.device)
+        if device_is_connected(dev):
+            _nmcli_priv("device", "disconnect", dev)
+        _nmcli_priv("device", "connect", dev)
+        print(f"OK: restarted interface {dev!r} (disconnect + connect).")
+    else:
+        conn = validate_connection(args.connection)
+        _down_then_up(conn, args.wait)
+        print(f"OK: restarted connection {conn!r} (down + up).")
+    return 0
+
+
+@privileged
+def nmcli_cmd_reapply(args: argparse.Namespace) -> int:
+    dev = validate_iface(args.device)
+    _nmcli_priv("device", "reapply", dev)
+    print(f"OK: reapplied configuration on device {dev!r}.")
+    return 0
+
+
+def add_target_args(parser: argparse.ArgumentParser, required: bool) -> None:
+    group = parser.add_mutually_exclusive_group(required=required)
+    group.add_argument("--connection", help="Connection name or UUID.")
+    group.add_argument(
+        "--device",
+        help="Interface name, e.g. eth0 (the active connection will be resolved automatically).",
+    )
+
+
+def add_wait_arg(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--wait", type=int, default=15, metavar="SECONDS",
+        help="Seconds to wait for activation (default 15; 0 = do not wait).",
+    )
+
+
+def register_nmcli(subparsers) -> None:
+    p = subparsers.add_parser("nmcli", help="NetworkManager connection/device management.")
+    sub = p.add_subparsers(dest="action", required=True, metavar="ACTION")
+
+    q = sub.add_parser("list", aliases=["connections"], help="List connection profiles.")
+    q.add_argument("--active", action="store_true", help="Only show active connections.")
+    q.set_defaults(func=nmcli_cmd_list)
+
+    q = sub.add_parser("devices", aliases=["status"], help="Show device status.")
+    q.set_defaults(func=nmcli_cmd_devices)
+
+    q = sub.add_parser("show", help="Show details for a connection or device.")
+    add_target_args(q, required=True)
+    q.set_defaults(func=nmcli_cmd_show)
+
+    q = sub.add_parser("set-static", help="Set a static IPv4 address on a connection and activate it.")
+    add_target_args(q, required=True)
+    q.add_argument("--address", required=True, metavar="IP/PREFIX", help="Static IPv4 in CIDR notation, e.g. 192.168.1.10/24.")
+    q.add_argument("--gateway", default=None, metavar="IP", help="Gateway IPv4 (cleared if omitted).")
+    q.add_argument("--dns", action="append", default=[], metavar="IP", help="DNS server IP (repeatable or comma-separated).")
+    add_wait_arg(q)
+    q.set_defaults(func=nmcli_cmd_set_static)
+
+    q = sub.add_parser("set-dhcp", help="Switch a connection back to DHCP and activate it.")
+    add_target_args(q, required=True)
+    add_wait_arg(q)
+    q.set_defaults(func=nmcli_cmd_set_dhcp)
+
+    q = sub.add_parser("renew", help="Force a DHCP lease renewal (deactivate + activate).")
+    add_target_args(q, required=True)
+    add_wait_arg(q)
+    q.set_defaults(func=nmcli_cmd_renew)
+
+    q = sub.add_parser("restart", help="Restart an interface or connection (deactivate + activate).")
+    add_target_args(q, required=True)
+    add_wait_arg(q)
+    q.set_defaults(func=nmcli_cmd_restart)
+
+    q = sub.add_parser("reapply", help="Reapply the active connection profile to a device.")
+    q.add_argument("--device", required=True, help="Interface name.")
+    q.set_defaults(func=nmcli_cmd_reapply)
+
+# ===========================================================================
+# Tool: ip (iproute2)
+# ===========================================================================
+
+def ip_cmd_show(args: argparse.Namespace) -> int:
+    obj = args.obj
+    argv = [ip_path()]
+    if getattr(args, "stats", False):
+        argv.append("-s")
+    if getattr(args, "brief", False):
+        argv.append("-brief")
+    argv += [obj, "show"]
+    dev = getattr(args, "dev", None)
+    if dev:
+        argv += ["dev", validate_iface(dev)]
+    proc = run_command(argv)
+    sys.stdout.write(proc.stdout)
+    return 0
+
+
+@privileged
+def ip_cmd_link_set(args: argparse.Namespace) -> int:
+    dev = validate_iface(args.device)
+    run_privileged([ip_path(), "link", "set", dev, args.state])
+    print(f"OK: set link {dev!r} {args.state}.")
+    return 0
+
+
+def register_ip(subparsers) -> None:
+    p = subparsers.add_parser("ip", help="Inspect interfaces/neighbours/routes and toggle links.")
+    sub = p.add_subparsers(dest="action", required=True, metavar="ACTION")
+
+    for name, aliases, obj, extra in (
+        ("addr", ["address"], "addr", ("brief", "stats")),
+        ("link", ["links"], "link", ("brief", "stats")),
+        ("neigh", ["neighbour"], "neigh", ()),
+        ("route", ["routes"], "route", ()),
+    ):
+        q = sub.add_parser(name, aliases=aliases, help=f"Show {obj} information (read-only).")
+        q.add_argument("--dev", help="Interface to filter by.")
+        if "brief" in extra:
+            q.add_argument("--brief", action="store_true", help="Brief output.")
+        if "stats" in extra:
+            q.add_argument("--stats", action="store_true", help="Include statistics (-s).")
+        q.set_defaults(func=ip_cmd_show, obj=obj)
+
+    q = sub.add_parser("link-set", help="Bring an interface up or down (privileged).")
+    q.add_argument("--device", required=True, help="Interface name.")
+    q.add_argument("state", choices=["up", "down"], help="Desired link state.")
+    q.set_defaults(func=ip_cmd_link_set)
+
+
+# ===========================================================================
+# Tool: dnsmasq (scoped DHCP / TFTP / DNS server)
+# ===========================================================================
+
+@privileged
+def dnsmasq_cmd_start(args: argparse.Namespace) -> int:
+    iface = validate_iface(args.interface)
+    lo, hi, lease = validate_dhcp_range(args.range)
+
+    argv = [
+        dnsmasq_path(),
+        f"--interface={iface}",
+        "--bind-interfaces",
+        f"--dhcp-range={lo},{hi},{lease}",
+    ]
+    if args.gateway:
+        argv.append(f"--dhcp-option=3,{validate_ip(args.gateway, 'gateway')}")
+    dns = validate_dns(args.dns or [])
+    if dns:
+        argv.append("--dhcp-option=6," + ",".join(dns))
+    if args.boot:
+        argv.append(f"--dhcp-boot={validate_bootfile(args.boot)}")
+    if args.tftp_root:
+        argv.append("--enable-tftp")
+        argv.append(f"--tftp-root={validate_serve_directory(args.tftp_root)}")
+    if args.log_queries:
+        argv.append("--log-queries")
+    if args.no_daemon:
+        argv.append("--no-daemon")
+
+    run_privileged(argv, stream=True)
+    print(f"OK: started dnsmasq on {iface!r} (range {lo}-{hi}, lease {lease}).")
+    return 0
+
+
+@privileged
+def dnsmasq_cmd_stop(args: argparse.Namespace) -> int:
+    proc = run_privileged([pkill_path(), "-TERM", "-x", "dnsmasq"], ok_returncodes=(0, 1))
+    if proc is None:
+        return 0  # --dry-run already printed
+    print("OK: stopped dnsmasq." if proc.returncode == 0 else "OK: dnsmasq was not running.")
+    return 0
+
+
+def register_dnsmasq(subparsers) -> None:
+    p = subparsers.add_parser("dnsmasq", help="Run a scoped DHCP (and optional TFTP/DNS) server.")
+    sub = p.add_subparsers(dest="action", required=True, metavar="ACTION")
+
+    q = sub.add_parser("start", help="Start dnsmasq (privileged; daemonizes unless --no-daemon).")
+    q.add_argument("--interface", required=True, help="Interface to serve DHCP on.")
+    q.add_argument("--range", required=True, metavar="LO,HI[,LEASE]", help="DHCP range, e.g. 192.168.1.10,192.168.1.20,12h.")
+    q.add_argument("--gateway", metavar="IP", help="Advertise this gateway (option 3).")
+    q.add_argument("--dns", action="append", default=[], metavar="IP", help="Advertise these DNS servers (option 6; repeatable or comma-separated).")
+    q.add_argument("--boot", metavar="FILE", help="Advertise this bootfile (dhcp-boot) for TFTP recovery.")
+    q.add_argument("--tftp-root", metavar="DIR", help="Also serve TFTP from this directory (enables dnsmasq's built-in TFTP).")
+    q.add_argument("--no-daemon", action="store_true", help="Stay in the foreground (do not daemonize).")
+    q.add_argument("--log-queries", action="store_true", help="Log DHCP/DNS queries.")
+    q.set_defaults(func=dnsmasq_cmd_start)
+
+    q = sub.add_parser("stop", help="Stop dnsmasq (privileged).")
+    q.set_defaults(func=dnsmasq_cmd_stop)
+
+# ===========================================================================
+# Tool: tcpdump (scoped packet capture)
+# ===========================================================================
+
+@privileged
+def tcpdump_cmd_capture(args: argparse.Namespace) -> int:
+    iface = args.interface
+    if iface != "any":
+        iface = validate_iface(iface)
+
+    argv = [tcpdump_path()]
+    if args.no_resolve:
+        argv.append("-n")
+    if args.link_header:
+        argv.append("-e")
+    v = args.verbose or 0
+    if v:
+        argv.append("-" + "v" * min(v, 3))
+    if args.snapshot_length:
+        argv += ["-s", str(validate_snaplen(args.snapshot_length))]
+    if args.count:
+        argv += ["-c", str(validate_count(args.count))]
+    if args.write:
+        argv += ["-w", validate_writable_path(args.write)]
+    argv += ["-i", iface]
+    if args.expression:
+        argv.append(validate_expression(args.expression))
+
+    run_privileged(argv, stream=True)
+    print("OK: tcpdump finished.")
+    return 0
+
+
+def register_tcpdump(subparsers) -> None:
+    p = subparsers.add_parser("tcpdump", help="Capture packets on an interface (privileged).")
+    sub = p.add_subparsers(dest="action", required=True, metavar="ACTION")
+
+    q = sub.add_parser("capture", help="Capture packets (foreground; prints decoded packets or writes a pcap).")
+    q.add_argument("--interface", required=True, metavar="IF|any", help="Interface to capture on, or 'any'.")
+    q.add_argument("--expression", metavar="BPF", help="Capture filter, e.g. 'port 67 or port 69'.")
+    q.add_argument("--count", type=int, metavar="N", help="Stop after N packets.")
+    q.add_argument("--write", metavar="FILE", help="Write packets to a pcap file (under your home or /tmp).")
+    q.add_argument("--snapshot-length", type=int, metavar="N", help="Snapshot length in bytes (1-262144).")
+    q.add_argument("--no-resolve", action="store_true", help="Do not resolve addresses/ports (-n).")
+    q.add_argument("--link-header", action="store_true", help="Print link-layer headers (-e).")
+    q.add_argument("--verbose", action="count", default=0, help="Increase verbosity (-v/-vv/-vvv).")
+    q.set_defaults(func=tcpdump_cmd_capture)
+
+
+# ===========================================================================
+# Tool: tftp (serve a directory over TFTP for firmware recovery)
+# ===========================================================================
+
+@privileged
+def tftp_cmd_serve(args: argparse.Namespace) -> int:
+    directory = validate_serve_directory(args.directory)
+    if not os.path.isfile(TFTP_SCRIPT):
+        raise NetworkHelperError(
+            f"TFTP server script not found at {TFTP_SCRIPT!r}. Re-run the installer."
+        )
+    run_privileged([python_path(), TFTP_SCRIPT, directory], stream=True)
+    print("OK: TFTP server exited.")
+    return 0
+
+
+def register_tftp(subparsers) -> None:
+    p = subparsers.add_parser("tftp", help="Serve a directory over TFTP (privileged).")
+    sub = p.add_subparsers(dest="action", required=True, metavar="ACTION")
+
+    q = sub.add_parser("serve", help="Serve files from a directory on UDP :69 (foreground).")
+    q.add_argument("--directory", required=True, metavar="DIR", help="Directory containing the firmware images.")
+    q.set_defaults(func=tftp_cmd_serve)
+
+# ===========================================================================
+# Meta commands: sudoers / doctor
+# ===========================================================================
+
+def cmd_sudoers(args: argparse.Namespace) -> int:
+    user = args.user or current_user()
+    script = proxy_path()
+    print(
+        textwrap.dedent(
+            f"""\
+            # agent-proxy for automation agents - generated by {PROG}.
+            # Grants '{user}' passwordless sudo access to *this proxy only*
+            # (the script is root-owned and validates every operation), never to
+            # the underlying tools directly. No other root operations are permitted.
+            #
+            # Install with:
+            #   sudo sh -c '{PROG} sudoers --user {user} > /etc/sudoers.d/{PROG} && chmod 0440 /etc/sudoers.d/{PROG} && visudo -c -f /etc/sudoers.d/{PROG}'
+            #
+            {user} ALL=(root) NOPASSWD: {script} *
+            """
+        )
+    )
+    return 0
+
+
+def cmd_doctor(args: argparse.Namespace) -> int:
+    ok = True
+    script = proxy_path()
+    print(f"{PROG} version: {__version__}")
+    print(f"proxy:  {script}")
+    try:
+        st = os.stat(script)
+        if st.st_uid != 0:
+            print("  WARN: proxy is not root-owned; a non-root owner could edit it and abuse the sudo rule.")
+            ok = False
+        if st.st_mode & 0o022:
+            print("  WARN: proxy is group/other-writable; the agent user could edit it.")
+            ok = False
+    except OSError as exc:
+        print(f"  WARN: cannot stat proxy: {exc}")
+        ok = False
+
+    print(f"user:   {current_user()}")
+
+    for name, path in (
+        ("nmcli", nmcli_path()),
+        ("ip", ip_path()),
+        ("dnsmasq", dnsmasq_path()),
+        ("tcpdump", tcpdump_path()),
+        ("pkill", pkill_path()),
+        ("python3", python_path()),
+    ):
+        on_path = "on PATH" if shutil.which(name) else "fallback"
+        print(f"{name}: {path} ({on_path})")
+        if not os.path.exists(path):
+            print(f"  WARN: {name} not found.")
+            ok = False
+    print(f"tftp:   {TFTP_SCRIPT}")
+    if not os.path.isfile(TFTP_SCRIPT):
+        print("  WARN: tftpserver.py not installed; re-run the installer.")
+        ok = False
+
+    listing = ""
+    returncode = None
+    try:
+        proc = subprocess.run([sudo_path(), "-n", "-l"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        listing = (proc.stdout or "") + (proc.stderr or "")
+        returncode = proc.returncode
+    except OSError as exc:
+        print(f"  WARN: could not run 'sudo -n -l': {exc}")
+        ok = False
+
+    if returncode == 0:
+        if script in listing:
+            print("  OK: the sudoers rule for this proxy appears to be present.")
+        elif "(ALL" in listing or "ALL : ALL" in listing or "(root) ALL" in listing:
+            print("  NOTE: user already has broad sudo privileges; the narrow proxy rule is not required.")
+        else:
+            print(f"  WARN: no sudoers rule for {script} found. Run '{PROG} sudoers' and install it.")
+            ok = False
+    else:
+        print("  WARN: 'sudo -n -l' failed - the user may have no sudo privileges at all.")
+        ok = False
+
+    print("doctor result:", "OK" if ok else "ISSUES FOUND")
+    return 0 if ok else 1
+
+# ===========================================================================
+# Argument parsing
+# ===========================================================================
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog=PROG,
+        description="Narrow, auditable wrapper around privileged network tools for unprivileged agents.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Examples:\n"
+            f"  {PROG} nmcli list\n"
+            f"  {PROG} nmcli set-static --device eth0 --address 192.168.1.10/24\n"
+            f"  {PROG} ip addr\n"
+            f"  {PROG} ip neigh\n"
+            f"  {PROG} ip link-set --device eth0 up\n"
+            f"  {PROG} dnsmasq start --interface eth0 --range 192.168.1.10,192.168.1.20,12h --boot openwrt.bin\n"
+            f"  {PROG} dnsmasq stop\n"
+            f"  {PROG} tcpdump capture --interface eth0 --expression 'port 67 or port 69' --count 50\n"
+            f"  {PROG} tftp serve --directory ~/firmware\n"
+            f"  {PROG} sudoers      # print the sudoers rule to install\n"
+            f"  {PROG} doctor       # verify the setup\n"
+        ),
+    )
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the privileged commands that would be run, without executing them.",
+    )
+    parser.add_argument(
+        "--traceback",
+        action="store_true",
+        help="Also print the full Python traceback for expected (handled) failures.",
+    )
+
+    sub = parser.add_subparsers(dest="tool", required=True, metavar="TOOL")
+
+    p = sub.add_parser("sudoers", help="Print the sudoers rule needed for the current user.")
+    p.add_argument("--user", default=None, help="User to grant privileges to (default: current user).")
+    p.set_defaults(func=cmd_sudoers)
+
+    p = sub.add_parser("doctor", help="Check the environment and sudoers setup.")
+    p.set_defaults(func=cmd_doctor)
+
+    register_nmcli(sub)
+    register_ip(sub)
+    register_dnsmasq(sub)
+    register_tcpdump(sub)
+    register_tftp(sub)
+
+    return parser
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    global DRY_RUN
+    DRY_RUN = args.dry_run
+
+    try:
+        func = args.func
+        if getattr(func, "requires_root", False) and not DRY_RUN and os.geteuid() != 0:
+            return _reexec_as_root()
+        return int(func(args))
+    except NetworkHelperError as exc:
+        print(exc, file=sys.stderr)
+        if args.traceback:
+            traceback.print_exc()
+        return 1
+    except KeyboardInterrupt:
+        print("\nERROR: interrupted by user.", file=sys.stderr)
+        return 130
+    except Exception as exc:  # noqa: BLE001 - report *everything* loudly
+        print(f"UNEXPECTED ERROR: {exc}", file=sys.stderr)
+        traceback.print_exc()
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())
