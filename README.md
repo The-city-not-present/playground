@@ -7,7 +7,7 @@ What I wanted: re-shell it to openwrt.
 Actual result: did not finish well. Current state unknown.
 I know I was able to log in. However, I have my main router, very similar, also 4A gigabit, should be similar. Working perfectly for many years with openwrt.
 
-My old and working router is assigning ips from 192.168.1.x
+My old and working router is assigning ips from 192.168.9.x
 
 The new - I tried to assign 192.268.2.x and I think that's where I maybe messed things up
 
@@ -19,7 +19,7 @@ I am now a non-privileged user, as it should be normal... Let me know if any com
 
 ## Timeline
 
-Main router - xiaomi mi4a gigabit, re-flashed to openwrt back in times. I don't now exact date. Working fine. Conventionally assigning 192.168.1.x to devices in local network. Accessed through wifi.
+Main router - xiaomi mi4a gigabit, re-flashed to openwrt back in times. I don't now exact date. Working fine. Conventionally assigning 192.168.9.x to devices in local network. Accessed through wifi.
 
 The router that is not working now - bought second hand. I don't know the date, I see a log record Aug 2024.
 
@@ -45,6 +45,6 @@ Typical behavior on boot with reset button - permanent orange for approx 5 secon
 
 Current topology: I have lenovo laptop connected to internet (to main router) via wifi. The problematic router is connected to lenovo with rj45 from lan. Also, a rj45 cable is going from main router lan to problematic router wan (blue).
 
-Please be aware of possible conflict: main router, that serves at wifi, assigns 192.168.1.x ips to devices from local network. Openwrt in recovery will still use 192.168.1.1. Accessing both from lenovo, through wired and wireless connection - not sure how much of a problem is it.
+Please be aware of possible conflict: main router, that serves at wifi, assigns 192.168.9.x ips to devices from local network. Openwrt in recovery will still use 192.168.1.1. Since the main router moved to 192.168.9.x (2026-11-22), this is no longer a conflict.
 
 

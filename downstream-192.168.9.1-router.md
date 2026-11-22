@@ -1,3 +1,10 @@
+> **NOTE (2026-11-22):** this is a read-only transcript captured against the main/working
+> router when its LAN was still `192.168.1.1`. The router has since been **renumbered to
+> `192.168.9.x`** (router = `192.168.9.1`, DHCP pool `192.168.9.0/24`) to avoid clashing with
+> OpenWrt failsafe/initramfs at `192.168.1.1`. All `192.168.1.x` addresses below are the
+> pre-renumber state and are historical only.
+
+
 ```
 BusyBox v1.36.1 (2023-11-14 13:38:11 UTC) built-in shell (ash)
 

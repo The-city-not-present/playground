@@ -55,8 +55,8 @@ they are the wrong series/variant for this board).
      ssh root@fe80::cabf:4cff:fe9b:2c80%enp7s0
      ```
      (no password — fresh OpenWrt allows empty-password root login on LAN)
-   - `http://192.168.1.1` works too, BUT it collides with the main router's IP —
-     prefer the link-local SSH above to avoid ambiguity.
+   - `http://192.168.1.1` works too (the main router is on 192.168.9.x since 2026-11-22,
+     so there is no conflict) — but the link-local SSH above is still the most reliable.
 
 5. **Verify the fix:**
    ```
@@ -87,7 +87,7 @@ It does NOT send a TFTP RRQ on its own — so a TFTP server alone is not enough;
 **DHCP + TFTP** server (dnsmasq does both):
 
 1. Put the Ethernet on the recovery subnet (a *different* subnet from the main router's
-   192.168.1.x, so no IP conflict — WiFi can stay up):
+   192.168.9.x, so no IP conflict — WiFi can stay up):
    ```
    sudo ip addr flush dev enp7s0
    sudo ip addr add 192.168.31.100/24 dev enp7s0
@@ -124,9 +124,9 @@ It does NOT send a TFTP RRQ on its own — so a TFTP server alone is not enough;
    or use link-local IPv6 `ssh root@fe80::cabf:4cff:fe9b:2c80%enp7s0` (needs the host to have
    IPv6 on `enp7s0`).
 
-Note: OpenWrt **failsafe** (different from U-Boot recovery) uses 192.168.1.1, which conflicts
-with the main router — for failsafe you must first `nmcli radio wifi off` to avoid two
-192.168.1.x interfaces.
+Note: OpenWrt **failsafe** (different from U-Boot recovery) uses 192.168.1.1. Since the main
+router moved to 192.168.9.x (2026-11-22), there is no conflict — you no longer need to drop
+WiFi to reach failsafe at 192.168.1.1.
 
 ## Important caveat
 - Re-flashing **will very likely fix the WiFi** (driver crash + missing 5G driver).

@@ -1,0 +1,96 @@
+dnsmasq: started, version 2.90 DNS disabled
+dnsmasq: compile time options: IPv6 GNU-getopt DBus no-UBus i18n IDN2 DHCP DHCPv6 no-Lua TFTP conntrack ipset nftset auth cryptohash DNSSEC loop-detect inotify dumpfile
+dnsmasq-dhcp: DHCP, IP range 192.168.31.1 -- 192.168.31.1, lease time 1h
+dnsmasq-dhcp: DHCP, sockets bound exclusively to interface enp7s0
+dnsmasq-tftp: TFTP root is /home/andrej/work/xiaomi-openwrt-restore/reflash/tftp-root  
+dnsmasq-dhcp: 2016337484 available DHCP range: 192.168.31.1 -- 192.168.31.1
+dnsmasq-dhcp: 2016337484 vendor class: U-Boot
+dnsmasq-dhcp: 2016337484 DHCPDISCOVER(enp7s0) 82:73:78:2e:b6:69 
+dnsmasq-dhcp: 2016337484 tags: enp7s0
+dnsmasq-dhcp: 2016337484 DHCPOFFER(enp7s0) 192.168.31.1 82:73:78:2e:b6:69 
+dnsmasq-dhcp: 2016337484 requested options: 1:netmask, 3:router, 6:dns-server, 12:hostname, 
+dnsmasq-dhcp: 2016337484 requested options: 17:root-path
+dnsmasq-dhcp: 2016337484 bootfile name: test.bin
+dnsmasq-dhcp: 2016337484 server name: 192.168.31.100
+dnsmasq-dhcp: 2016337484 next server: 192.168.31.100
+dnsmasq-dhcp: 2016337484 sent size:  1 option: 53 message-type  2
+dnsmasq-dhcp: 2016337484 sent size:  4 option: 54 server-identifier  192.168.31.100
+dnsmasq-dhcp: 2016337484 sent size:  4 option: 51 lease-time  1h
+dnsmasq-dhcp: 2016337484 sent size:  4 option: 58 T1  30m
+dnsmasq-dhcp: 2016337484 sent size:  4 option: 59 T2  52m30s
+dnsmasq-dhcp: 2016337484 sent size:  4 option:  1 netmask  255.255.255.0
+dnsmasq-dhcp: 2016337484 sent size:  4 option: 28 broadcast  192.168.31.255
+dnsmasq-dhcp: 2016337484 sent size:  4 option:  3 router  192.168.31.100
+dnsmasq-dhcp: 2016337736 available DHCP range: 192.168.31.1 -- 192.168.31.1
+dnsmasq-dhcp: 2016337736 vendor class: U-Boot
+dnsmasq-dhcp: 2016337736 DHCPDISCOVER(enp7s0) 82:73:78:2e:b6:69 
+dnsmasq-dhcp: 2016337736 tags: enp7s0
+dnsmasq-dhcp: 2016337736 DHCPOFFER(enp7s0) 192.168.31.1 82:73:78:2e:b6:69 
+dnsmasq-dhcp: 2016337736 requested options: 1:netmask, 3:router, 6:dns-server, 12:hostname, 
+dnsmasq-dhcp: 2016337736 requested options: 17:root-path
+dnsmasq-dhcp: 2016337736 bootfile name: test.bin
+dnsmasq-dhcp: 2016337736 server name: 192.168.31.100
+dnsmasq-dhcp: 2016337736 next server: 192.168.31.100
+dnsmasq-dhcp: 2016337736 sent size:  1 option: 53 message-type  2
+dnsmasq-dhcp: 2016337736 sent size:  4 option: 54 server-identifier  192.168.31.100
+dnsmasq-dhcp: 2016337736 sent size:  4 option: 51 lease-time  1h
+dnsmasq-dhcp: 2016337736 sent size:  4 option: 58 T1  30m
+dnsmasq-dhcp: 2016337736 sent size:  4 option: 59 T2  52m30s
+dnsmasq-dhcp: 2016337736 sent size:  4 option:  1 netmask  255.255.255.0
+dnsmasq-dhcp: 2016337736 sent size:  4 option: 28 broadcast  192.168.31.255
+dnsmasq-dhcp: 2016337736 sent size:  4 option:  3 router  192.168.31.100
+dnsmasq-dhcp: 2016338238 available DHCP range: 192.168.31.1 -- 192.168.31.1
+dnsmasq-dhcp: 2016338238 vendor class: U-Boot
+dnsmasq-dhcp: 2016338238 DHCPDISCOVER(enp7s0) 82:73:78:2e:b6:69 
+dnsmasq-dhcp: 2016338238 tags: enp7s0
+dnsmasq-dhcp: 2016338238 DHCPOFFER(enp7s0) 192.168.31.1 82:73:78:2e:b6:69 
+dnsmasq-dhcp: 2016338238 requested options: 1:netmask, 3:router, 6:dns-server, 12:hostname, 
+dnsmasq-dhcp: 2016338238 requested options: 17:root-path
+dnsmasq-dhcp: 2016338238 bootfile name: test.bin
+dnsmasq-dhcp: 2016338238 server name: 192.168.31.100
+dnsmasq-dhcp: 2016338238 next server: 192.168.31.100
+dnsmasq-dhcp: 2016338238 sent size:  1 option: 53 message-type  2
+dnsmasq-dhcp: 2016338238 sent size:  4 option: 54 server-identifier  192.168.31.100
+dnsmasq-dhcp: 2016338238 sent size:  4 option: 51 lease-time  1h
+dnsmasq-dhcp: 2016338238 sent size:  4 option: 58 T1  30m
+dnsmasq-dhcp: 2016338238 sent size:  4 option: 59 T2  52m30s
+dnsmasq-dhcp: 2016338238 sent size:  4 option:  1 netmask  255.255.255.0
+dnsmasq-dhcp: 2016338238 sent size:  4 option: 28 broadcast  192.168.31.255
+dnsmasq-dhcp: 2016338238 sent size:  4 option:  3 router  192.168.31.100
+dnsmasq-dhcp: 2016339240 available DHCP range: 192.168.31.1 -- 192.168.31.1
+dnsmasq-dhcp: 2016339240 vendor class: U-Boot
+dnsmasq-dhcp: 2016339240 DHCPDISCOVER(enp7s0) 82:73:78:2e:b6:69 
+dnsmasq-dhcp: 2016339240 tags: enp7s0
+dnsmasq-dhcp: 2016339240 DHCPOFFER(enp7s0) 192.168.31.1 82:73:78:2e:b6:69 
+dnsmasq-dhcp: 2016339240 requested options: 1:netmask, 3:router, 6:dns-server, 12:hostname, 
+dnsmasq-dhcp: 2016339240 requested options: 17:root-path
+dnsmasq-dhcp: 2016339240 bootfile name: test.bin
+dnsmasq-dhcp: 2016339240 server name: 192.168.31.100
+dnsmasq-dhcp: 2016339240 next server: 192.168.31.100
+dnsmasq-dhcp: 2016339240 sent size:  1 option: 53 message-type  2
+dnsmasq-dhcp: 2016339240 sent size:  4 option: 54 server-identifier  192.168.31.100
+dnsmasq-dhcp: 2016339240 sent size:  4 option: 51 lease-time  1h
+dnsmasq-dhcp: 2016339240 sent size:  4 option: 58 T1  30m
+dnsmasq-dhcp: 2016339240 sent size:  4 option: 59 T2  52m30s
+dnsmasq-dhcp: 2016339240 sent size:  4 option:  1 netmask  255.255.255.0
+dnsmasq-dhcp: 2016339240 sent size:  4 option: 28 broadcast  192.168.31.255
+dnsmasq-dhcp: 2016339240 sent size:  4 option:  3 router  192.168.31.100
+dnsmasq-dhcp: 2016337484 available DHCP range: 192.168.31.1 -- 192.168.31.1
+dnsmasq-dhcp: 2016337484 vendor class: U-Boot
+dnsmasq-dhcp: 2016337484 DHCPREQUEST(enp7s0) 192.168.31.1 82:73:78:2e:b6:69 
+dnsmasq-dhcp: 2016337484 tags: enp7s0
+dnsmasq-dhcp: 2016337484 DHCPACK(enp7s0) 192.168.31.1 82:73:78:2e:b6:69 
+dnsmasq-dhcp: 2016337484 requested options: 1:netmask, 3:router, 6:dns-server, 12:hostname, 
+dnsmasq-dhcp: 2016337484 requested options: 17:root-path
+dnsmasq-dhcp: 2016337484 bootfile name: test.bin
+dnsmasq-dhcp: 2016337484 server name: 192.168.31.100
+dnsmasq-dhcp: 2016337484 next server: 192.168.31.100
+dnsmasq-dhcp: 2016337484 sent size:  1 option: 53 message-type  5
+dnsmasq-dhcp: 2016337484 sent size:  4 option: 54 server-identifier  192.168.31.100
+dnsmasq-dhcp: 2016337484 sent size:  4 option: 51 lease-time  1h
+dnsmasq-dhcp: 2016337484 sent size:  4 option: 58 T1  30m
+dnsmasq-dhcp: 2016337484 sent size:  4 option: 59 T2  52m30s
+dnsmasq-dhcp: 2016337484 sent size:  4 option:  1 netmask  255.255.255.0
+dnsmasq-dhcp: 2016337484 sent size:  4 option: 28 broadcast  192.168.31.255
+dnsmasq-dhcp: 2016337484 sent size:  4 option:  3 router  192.168.31.100
+dnsmasq-tftp: sent /home/andrej/work/xiaomi-openwrt-restore/reflash/tftp-root/test.bin to 192.168.31.1

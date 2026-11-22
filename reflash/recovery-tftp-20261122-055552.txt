@@ -1,0 +1,30 @@
+tcpdump: verbose output suppressed, use -v[v]... for full protocol decode
+listening on enp7s0, link-type EN10MB (Ethernet), snapshot length 262144 bytes
+06:07:57.702488 82:73:78:2e:b6:69 > ff:ff:ff:ff:ff:ff, ethertype IPv4 (0x0800), length 342: 0.0.0.0.68 > 255.255.255.255.67: BOOTP/DHCP, Request from 82:73:78:2e:b6:69, length 300
+06:07:57.702907 1c:75:08:61:17:51 > ff:ff:ff:ff:ff:ff, ethertype ARP (0x0806), length 42: Request who-has 192.168.31.1 tell 192.168.31.100, length 28
+06:07:57.954515 82:73:78:2e:b6:69 > ff:ff:ff:ff:ff:ff, ethertype IPv4 (0x0800), length 342: 0.0.0.0.68 > 255.255.255.255.67: BOOTP/DHCP, Request from 82:73:78:2e:b6:69, length 300
+06:07:58.456571 82:73:78:2e:b6:69 > ff:ff:ff:ff:ff:ff, ethertype IPv4 (0x0800), length 342: 0.0.0.0.68 > 255.255.255.255.67: BOOTP/DHCP, Request from 82:73:78:2e:b6:69, length 300
+06:07:58.739510 1c:75:08:61:17:51 > ff:ff:ff:ff:ff:ff, ethertype ARP (0x0806), length 42: Request who-has 192.168.31.1 tell 192.168.31.100, length 28
+06:07:59.458569 82:73:78:2e:b6:69 > ff:ff:ff:ff:ff:ff, ethertype IPv4 (0x0800), length 342: 0.0.0.0.68 > 255.255.255.255.67: BOOTP/DHCP, Request from 82:73:78:2e:b6:69, length 300
+06:07:59.763512 1c:75:08:61:17:51 > ff:ff:ff:ff:ff:ff, ethertype ARP (0x0806), length 42: Request who-has 192.168.31.1 tell 192.168.31.100, length 28
+06:08:00.707851 1c:75:08:61:17:51 > 82:73:78:2e:b6:69, ethertype IPv4 (0x0800), length 342: 192.168.31.100.67 > 192.168.31.1.68: BOOTP/DHCP, Reply, length 300
+06:08:00.707998 82:73:78:2e:b6:69 > ff:ff:ff:ff:ff:ff, ethertype IPv4 (0x0800), length 342: 0.0.0.0.68 > 255.255.255.255.67: BOOTP/DHCP, Request from 82:73:78:2e:b6:69, length 300
+06:08:00.708857 1c:75:08:61:17:51 > 82:73:78:2e:b6:69, ethertype IPv4 (0x0800), length 342: 192.168.31.100.67 > 192.168.31.1.68: BOOTP/DHCP, Reply, length 300
+06:08:00.710289 1c:75:08:61:17:51 > 82:73:78:2e:b6:69, ethertype IPv4 (0x0800), length 342: 192.168.31.100.67 > 192.168.31.1.68: BOOTP/DHCP, Reply, length 300
+06:08:00.711707 1c:75:08:61:17:51 > 82:73:78:2e:b6:69, ethertype IPv4 (0x0800), length 342: 192.168.31.100.67 > 192.168.31.1.68: BOOTP/DHCP, Reply, length 300
+06:08:00.718903 1c:75:08:61:17:51 > 82:73:78:2e:b6:69, ethertype IPv4 (0x0800), length 342: 192.168.31.100.67 > 192.168.31.1.68: BOOTP/DHCP, Reply, length 300
+06:08:00.720152 1c:75:08:61:17:51 > 82:73:78:2e:b6:69, ethertype IPv4 (0x0800), length 342: 192.168.31.100.67 > 192.168.31.1.68: BOOTP/DHCP, Reply, length 300
+06:08:00.721359 1c:75:08:61:17:51 > 82:73:78:2e:b6:69, ethertype IPv4 (0x0800), length 342: 192.168.31.100.67 > 192.168.31.1.68: BOOTP/DHCP, Reply, length 300
+06:08:00.722318 1c:75:08:61:17:51 > 82:73:78:2e:b6:69, ethertype IPv4 (0x0800), length 342: 192.168.31.100.67 > 192.168.31.1.68: BOOTP/DHCP, Reply, length 300
+06:08:00.722653 1c:75:08:61:17:51 > 82:73:78:2e:b6:69, ethertype IPv4 (0x0800), length 342: 192.168.31.100.67 > 192.168.31.1.68: BOOTP/DHCP, Reply, length 300
+06:08:00.726226 1c:75:08:61:17:51 > 82:73:78:2e:b6:69, ethertype IPv4 (0x0800), length 342: 192.168.31.100.67 > 192.168.31.1.68: BOOTP/DHCP, Reply, length 300
+06:08:00.740057 82:73:78:2e:b6:69 > ff:ff:ff:ff:ff:ff, ethertype ARP (0x0806), length 60: Request who-has 192.168.31.100 tell 192.168.31.1, length 46
+06:08:00.740084 1c:75:08:61:17:51 > 82:73:78:2e:b6:69, ethertype ARP (0x0806), length 42: Reply 192.168.31.100 is-at 1c:75:08:61:17:51, length 28
+06:08:00.740201 82:73:78:2e:b6:69 > 1c:75:08:61:17:51, ethertype IPv4 (0x0800), length 82: 192.168.31.1.1985 > 192.168.31.100.69: TFTP, length 40, RRQ "test.bin" octet timeout 5 blksize 1468
+06:08:06.035483 1c:75:08:61:17:51 > 82:73:78:2e:b6:69, ethertype ARP (0x0806), length 42: Request who-has 192.168.31.1 tell 192.168.31.100, length 28
+06:08:07.059553 1c:75:08:61:17:51 > 82:73:78:2e:b6:69, ethertype ARP (0x0806), length 42: Request who-has 192.168.31.1 tell 192.168.31.100, length 28
+06:08:08.083524 1c:75:08:61:17:51 > 82:73:78:2e:b6:69, ethertype ARP (0x0806), length 42: Request who-has 192.168.31.1 tell 192.168.31.100, length 28
+
+24 packets captured
+24 packets received by filter
+0 packets dropped by kernel

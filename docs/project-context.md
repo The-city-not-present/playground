@@ -12,6 +12,13 @@ Router label (via OCR): model R4A, MAC `24:CF:24:89:0E:D5`.
 > (MT7663 unbound) and WiFi was broken. Correct image prefix:
 > `xiaomi_mi-router-4a-gigabit-v2`.
 
+> **UPDATE (2026-11-22): the main router was renumbered to `192.168.9.x`.** Its LAN moved
+> off `192.168.1.x` to **`192.168.9.x`** (router = `192.168.9.1`, DHCP pool `192.168.9.0/24`)
+> so it no longer clashes with OpenWrt **failsafe** / **initramfs**, both of which default to
+> **`192.168.1.1`**. Reaching `192.168.1.1` over Ethernet no longer requires dropping WiFi
+> (`nmcli radio wifi off`). (`192.168.1.x` references in the dated notes below describe the
+> pre-renumber state.)
+
 ## Current state (2026-11-21) — router in U-Boot TFTP recovery (blinking pink LED)
 The user attempted OpenWrt **failsafe** (hold reset ~10 s at power-on) but hit an IP conflict,
 so nothing answered on 192.168.1.1. The router is now in the stock **U-Boot TFTP recovery**
@@ -23,7 +30,8 @@ mode, NOT failsafe and NOT normal OpenWrt. Verified live:
   (it TFTPs `test.bin` only after it gets a DHCP lease — see update 3).
 - Host WiFi wlp6s0 still up (192.168.1.155/24 gw 192.168.1.1, main router). enp7s0 = no IP.
 
-### IP-conflict gotcha (the user's concern was correct)
+### IP-conflict gotcha (the user's concern was correct) — RESOLVED 2026-11-22
+- *(Since 2026-11-22 the main router is on 192.168.9.x, so the conflict below no longer applies.)*
 - OpenWrt **failsafe** LAN = **192.168.1.1** → collides with the main router + WiFi 192.168.1.x.
   Two interfaces on 192.168.1.0/24 = routing ambiguity (that's why ping gave
   "Destination Host Unreachable"). To use failsafe you MUST first `nmcli radio wifi off`
@@ -211,8 +219,8 @@ Recovery runbook (all via agent-proxy; install first with `sudo ./nmcli-proxy/in
     (`set-static`, `set-dhcp`, …) is still unavailable to the agent. The sudoers rule for
     `agent-instance-01` is NOT installed.
 - Network now:
-  - `wlp6s0` (WiFi `ahome-60let-2-24`) = 192.168.1.155/24, gw 192.168.1.1 (working OpenWrt,
-    MAC `50:64:2b:e8:6c:bc`). Internet OK.
+  - `wlp6s0` (WiFi `ahome-60let-2-24`) = 192.168.9.x/24 (DHCP), gw 192.168.9.1 (working
+    OpenWrt, MAC `50:64:2b:e8:6c:bc`). Internet OK.
   - `enp7s0` (Ethernet, RJ45 to the broken router) = **link UP** (carrier=1, 100 Mbps),
     NM profile "Wired connection 1", now `192.168.2.206/24` via DHCP from the router.
 
@@ -280,17 +288,19 @@ Because the real WAN is dead and WiFi is broken, repurposed **LAN1 as the WAN**:
 4. Power-cycle the router holding **reset ~10 s** (LED blinking = recovery). Watch the
    dnsmasq log for `DHCPACK 192.168.31.1` then `dnsmasq-tftp: sent ... test.bin`.
 5. initramfs OpenWrt boots (RAM only, no flash write yet). Reach it via link-local IPv6
-   `fe80::cabf:4cff:fe9b:2c80%enp7s0` (or 192.168.1.1 with WiFi down), then SCP +
+   `fe80::cabf:4cff:fe9b:2c80%enp7s0` (or 192.168.1.1 — no conflict now that the main
+   router is on 192.168.9.x), then SCP +
    `sysupgrade -n` the **23.05.6 v2 squashfs** image (see `reflash/INSTRUCTIONS.md`).
 
-## Downstream router (192.168.1.1) — reference, READ-ONLY (do not modify)
+## Downstream router (192.168.9.1) — reference, READ-ONLY (do not modify)
 User's main/working router (same HW: R4A Gigabit, ramips/mt7621), running
-**OpenWrt 23.05.2** (kernel 5.15.137) for years. Access: `netadmin-agent-01@192.168.1.1`,
+**OpenWrt 23.05.2** (kernel 5.15.137) for years. Access: `netadmin-agent-01@192.168.9.1`,
 password `freedom2agents`; read-only via `sudo -n /usr/sbin/netadmin {status|logs|network-config}`.
 - Ports: **lan1 DEAD** (carrier=0), **lan2 OK** (carrier=1), **wan OK** (carrier=1;
   WAN gets ISP CGNAT `100.125.131.245/17` via dhcp).
-- Network: LAN static 192.168.1.1/24; WAN dhcp with **static DNS** (`peerdns 0` +
-  `8.8.8.8`/`8.8.4.4`) — this is the "static" config the user noticed.
+- Network: LAN static 192.168.9.1/24 (renumbered from 192.168.1.x on 2026-11-22 to avoid
+  clashing with OpenWrt failsafe/initramfs at 192.168.1.1); WAN dhcp with **static DNS**
+  (`peerdns 0` + `8.8.8.8`/`8.8.4.4`) — this is the "static" config the user noticed.
 - WiFi works: 2.4G `ahome-60let-2-24`, 5G `ahome-60let-2-51`, WPA3 (`sae-mixed`).
 
 ## Key insight → re-flash plan (UPDATED: use V2 images)
@@ -313,4 +323,5 @@ partition (mtd3 is intact).
   not failsafe). Give it a TFTP server at 192.168.31.100.
 - R4A Gigabit uses an A/B dual-firmware layout; stock recovery = hold reset while powering
   on (U-Boot TFTP).
-- Failsafe = 192.168.1.1 (conflicts with main router); U-Boot recovery = 192.168.31.1 (safe).
+- Failsafe = 192.168.1.1 (no longer conflicts — the main router is on 192.168.9.x since
+  2026-11-22); U-Boot recovery = 192.168.31.1 (safe).
