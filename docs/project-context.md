@@ -121,6 +121,85 @@ sudo ip neigh replace 192.168.31.1 lladdr 82:73:78:2e:b6:69 nud permanent dev en
 > TFTP DATA now flows and the initramfs comes up (192.168.1.1 / link-local
 > `fe80::cabf:4cff:fe9b:2c80%enp7s0`).
 
+### 2026-11-22 update 6 — TFTP STILL stalls: ARP pre-seed was never applied
+Re-ran recovery 06:07–06:08 (dnsmasq + tcpdump captured in `dnsmasq-20261122-055217.log`
+and `reflash/recovery-tftp-20261122-055552.txt`). DHCP handshake completed and dnsmasq
+logged `sent ... test.bin to 192.168.31.1`, BUT the tcpdump shows the SAME ARP stall:
+after `TFTP RRQ "test.bin"` the host ARPs `who-has 192.168.31.1` with no reply and NO TFTP
+DATA ever goes out. `ip neigh show dev enp7s0` = `192.168.31.1 FAILED`. Root cause
+unchanged: the `ip neigh replace ... nud permanent` pre-seed from update 5 was **never
+applied** (absent from last-commands.md). Also found: **two dnsmasq instances** (PID 415143
+from 2026-11-21, PID 456964 from 05:52) + tcpdump are still running — must kill all stale
+ones and run exactly one dnsmasq. And enp7s0 has **no IPv6** (link-local missing), needed
+later to reach the initramfs via `fe80::cabf:4cff:fe9b:2c80%enp7s0`.
+
+**Next step (the only missing piece):** kill stale dnsmasq/tcpdump, flush + re-assert
+enp7s0 = 192.168.31.100/24, pre-seed the ARP entry
+(`ip neigh replace 192.168.31.1 lladdr 82:73:78:2e:b6:69 nud permanent dev enp7s0`), run ONE
+dnsmasq, re-trigger recovery, and confirm TFTP DATA flows on tcpdump. Then boot initramfs →
+`sysupgrade -n` the v2 squashfs. Files verified: `test.bin` = v2 initramfs (61920cdf…),
+v2 squashfs d1bbbc98….
+
+### 2026-11-22 update 7 — pre-seed applied but TFTP STILL stalls (entry not PERMANENT)
+User ran steps 1+2 (cleanup + `ip neigh replace … nud permanent` + one dnsmasq + tcpdump +
+power-cycle). Result (tcpdump 06:27:59): DHCP DISCOVER/OFFER worked (OFFER unicast to the
+recovery MAC, no host ARP during DHCP), router ARPed `who-has 192.168.31.100` (host answered),
+then `TFTP RRQ "test.bin"`, then the host sent **unicast** ARP probes `who-has 192.168.31.1 →
+82:73:78:2e:b6:69` (×3, ~1 s apart) with **no reply** — and **NO TFTP DATA flowed**. So the
+initramfs still never downloads. **Do NOT go to the flash step — the initramfs is not up.**
+
+`ip neigh show dev enp7s0` now = `192.168.31.1 FAILED`, NOT `PERMANENT`. The pre-seed did not
+hold. The **unicast** (not broadcast) probe proves the kernel *had* the MAC cached but in STALE
+state (learned from the router's ARP request + RRQ), not PERMANENT — so it re-probed and went
+FAILED. Root cause: U-Boot *sends* ARP requests (to find the TFTP server) but does NOT *answer*
+ARP for its own 192.168.31.1 — so the host must never ARP for it.
+
+**Next step (bulletproof re-run):** use `del`+`add` (NOT `replace`), and VERIFY the entry is
+PERMANENT *before* power-cycling:
+```
+sudo ip neigh del 192.168.31.1 dev enp7s0 2>/dev/null || true
+sudo ip neigh add 192.168.31.1 lladdr 82:73:78:2e:b6:69 nud permanent dev enp7s0
+ip neigh show dev enp7s0     # MUST print: 192.168.31.1 lladdr 82:73:78:2e:b6:69 PERMANENT
+```
+Do NOT run `ip addr flush` / `ip link set down/up` AFTER the `add` (they clear neighbours).
+Keep dnsmasq + tcpdump running, then power-cycle holding reset ~10 s. Success = TFTP DATA flows
+after the RRQ (no more ARP probes). Also noted: NM shows enp7s0 "disconnected" (manual IP, no
+active profile) and wlp6s0 "connected" — no IP conflict on 192.168.31.x; but NM could
+auto-activate the wired profile and flush the manual IP (watch for it).
+
+### 2026-11-22 update 8 — recovery tooling complete: the proxy covers the whole TFTP flow
+The single blocker from update 7 (a *permanent* ARP pre-seed + recovery-subnet static IP) is now
+implemented in `nmcli-proxy/agent-proxy` v2.1.0, so the whole U-Boot TFTP recovery can be driven by
+the unprivileged agent without manual sudo. New privileged verbs:
+
+- `ip addr-add --device <if> --address <IP/PREFIX>`  (was: `ip addr add ...`)
+- `ip addr-flush --device <if>`                     (was: `ip addr flush dev ...`)
+- `ip neigh-add --device <if> --address <IP> --lladdr <MAC> [--nud permanent]`
+- `ip neigh-replace ...` / `ip neigh-del ...`
+- `dnsmasq start --authoritative --no-dns ...`      (matches dnsmasq-recovery.conf)
+- `tcpdump stop`                                    (pkill -x tcpdump)
+
+Also fixed a real bug: `pkill_path()` resolved the `pkill -> pgrep` symlink, so `dnsmasq stop`
+(and the new `tcpdump stop`) actually ran `pgrep -TERM` (invalid option, exit 2) instead of
+signalling. `pkill` now keeps its name (the multi-call binary dispatches on argv[0]).
+
+Recovery runbook (all via agent-proxy; install first with `sudo ./nmcli-proxy/install.sh --user <agent>`):
+1. `agent-proxy dnsmasq stop` && `agent-proxy tcpdump stop`
+2. `agent-proxy ip addr-flush --device enp7s0`
+   `agent-proxy ip addr-add --device enp7s0 --address 192.168.31.100/24`
+   `agent-proxy ip link-set --device enp7s0 up`
+3. `agent-proxy ip neigh-del --device enp7s0 --address 192.168.31.1`
+   `agent-proxy ip neigh-add --device enp7s0 --address 192.168.31.1 --lladdr 82:73:78:2e:b6:69`
+   VERIFY `agent-proxy ip neigh --dev enp7s0` prints `... PERMANENT` *before* power-cycling.
+4. `agent-proxy dnsmasq start --interface enp7s0 --range 192.168.31.1,192.168.31.1,1h \
+       --gateway 192.168.31.100 --boot test.bin \
+       --tftp-root /home/andrej/work/xiaomi-openwrt-restore/reflash/tftp-root \
+       --authoritative --no-dns --no-daemon`
+   `agent-proxy tcpdump capture --interface enp7s0 \
+       --expression 'arp or udp port 67 or udp port 68 or udp port 69'`
+5. Power-cycle holding reset ~10 s; success = TFTP DATA flows (no `who-has 192.168.31.1` stall).
+6. initramfs at 192.168.1.1 / fe80::cabf:4cff:fe9b:2c80%enp7s0 -> `sysupgrade -n` the v2 squashfs.
+
 ## Current state (live, verified 2026-03-26)
 - Host: `lenovo-Ideapad-Z560`, Linux Mint 22 (Wilma), NetworkManager.
 - Agent runs as non-privileged user `agent-instance-01` (uid 1002).

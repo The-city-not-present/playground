@@ -30,3 +30,51 @@ andrej@lenovo-Ideapad-Z560:~/work/xiaomi-openwrt-restore$
 
 ```
 
+2026-11-22 05:52 MSK
+
+05:53 (approx):
+sudo dnsmasq --conf-file=/home/andrej/work/xiaomi-openwrt-restore/reflash/dnsmasq-recovery-$(date +%Y%m%d-%H%M%S).conf  --no-daemon
+
+05:55 (approx):
+sudo tcpdump -i enp7s0 -n -e -l  'arp or udp port 67 or udp port 68 or udp port 69' > /home/andrej/work/xiaomi-openwrt-restore/reflash/recovery-tftp-$(date +%Y%m%d-%H%M%S).txt 2>&1
+
+router is still blinking pink, as it was its last state for last hours
+
+05:57
+Will attempt a reboot
+power off - 10-20 seconds wait - power on
+observation: led permanent orange
+
+06:03
+wanted to power off an power on holding reset button - was not holding it properly
+observation: permanent orange led
+
+06:07
+will attempt a reboot with reset button
+observation: led permanent orange, for approx 5 seconds - orange blinking, for several more seconds - permament orange, for like 10 seconds - pink blinking
+
+2026-11-22 06:27 MSK
+
+Attempted recovery again, this time applying the ARP pre-seed first (cleanup + pre-seed + one dnsmasq + tcpdump + power-cycle).
+
+```
+sudo pkill -f 'dnsmasq --conf-file=.*dnsmasq-recovery'
+sudo pkill -f 'tcpdump -i enp7s0'
+sudo ip neigh flush dev enp7s0
+sudo ip addr flush dev enp7s0
+sudo ip addr add 192.168.31.100/24 dev enp7s0
+sudo ip link set enp7s0 up
+sudo ip neigh replace 192.168.31.1 lladdr 82:73:78:2e:b6:69 nud permanent dev enp7s0
+sudo dnsmasq --conf-file=/home/andrej/work/xiaomi-openwrt-restore/reflash/dnsmasq-recovery.conf --no-daemon
+sudo tcpdump -i enp7s0 -n -e -l 'arp or udp port 67 or udp port 68 or udp port 69'
+```
+
+tcpdump result: DHCP DISCOVER/OFFER ok -> router ARP `who-has 192.168.31.100` (host replies) -> TFTP RRQ "test.bin" -> host sends **unicast** ARP probe `who-has 192.168.31.1 -> 82:73:78:2e:b6:69` (x3, no reply) -> **NO TFTP DATA**. Still stalls.
+
+`ip neigh show dev enp7s0` -> `192.168.31.1 FAILED`  (pre-seed did NOT hold; not PERMANENT)
+
+=> initramfs did NOT boot. Need to re-apply the ARP entry with `ip neigh del` + `ip neigh add ... nud permanent` and VERIFY `ip neigh show` prints PERMANENT before power-cycling.
+
+
+
+
