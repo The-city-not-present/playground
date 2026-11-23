@@ -35,6 +35,8 @@ purpose: no compiled binaries, every privileged action is a visible invocation.
 | `agent-proxy tcpdump capture ...` | Capture packets | yes |
 | `agent-proxy tcpdump stop` | Stop running tcpdump | yes |
 | `agent-proxy tftp serve --directory <dir>` | Serve a directory over TFTP | yes |
+| `agent-proxy tftp stop` | Stop the TFTP server | yes |
+| `agent-proxy reset` | Stop all agent-proxy-started services (TFTP, dnsmasq, tcpdump) | yes |
 | `agent-proxy sudoers` | Print the sudoers rule to install | no |
 | `agent-proxy doctor` | Verify environment and sudoers setup | no |
 
@@ -129,9 +131,11 @@ agent-proxy dnsmasq start --interface eth0 --range 192.168.1.10,192.168.1.20,12h
 agent-proxy tftp serve --directory ~/firmware
 # watch the router's DHCP/TFTP traffic
 agent-proxy tcpdump capture --interface eth0 --expression 'port 67 or port 69' --count 50
-# stop the DHCP server
+# stop the DHCP server / packet capture
 agent-proxy dnsmasq stop
 agent-proxy tcpdump stop
+# ...or stop everything left over from a prior run in one go
+agent-proxy reset
 
 # preview what would run, without executing privileged commands
 agent-proxy --dry-run tcpdump capture --interface eth0 --count 50
@@ -139,7 +143,9 @@ agent-proxy --dry-run tcpdump capture --interface eth0 --count 50
 
 `dnsmasq start` daemonizes by default; stop it with `agent-proxy dnsmasq stop`
 (`--no-daemon` keeps it in the foreground for debugging). `tftp serve` runs in
-the foreground — background it, or run it in its own terminal.
+the foreground — background it, or run it in its own terminal; stop a
+backgrounded copy with `agent-proxy tftp stop`. `agent-proxy reset` stops all
+three (TFTP, dnsmasq, tcpdump) at once.
 
 ## Error reporting
 

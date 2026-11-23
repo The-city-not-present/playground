@@ -53,7 +53,7 @@ import textwrap
 import traceback
 from typing import List, Optional, Sequence, Tuple
 
-__version__ = "2.1.0"
+__version__ = "2.2.0"
 
 PROG = "agent-proxy"
 
@@ -67,6 +67,10 @@ SUDO_FALLBACK = "/usr/bin/sudo"
 
 # tftpserver.py is installed alongside this proxy by install.sh.
 TFTP_SCRIPT = "/usr/local/lib/agent-proxy/tftpserver.py"
+
+# The TFTP server runs as `python3 .../tftpserver.py <dir>`, so its process
+# name is `python3`; `pkill -x` won't match it. Match its full command line.
+TFTP_PGREP_PATTERN = "tftpserver\\.py"
 
 # Linux interface names: 1-15 chars, alnum plus a small safe set, first char alnum.
 IFACE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,14}$")
@@ -223,6 +227,19 @@ def run_privileged(argv: Sequence[str], *, ok_returncodes=(0,), stream: bool = F
         print(f"[dry-run] would run: {format_argv(argv)}")
         return None
     return run_command(argv, ok_returncodes=ok_returncodes, stream=stream)
+
+
+def stop_process(label: str, pkill_args: Sequence[str]) -> None:
+    """Send SIGTERM via pkill and print a consistent result line.
+
+    ``pkill_args`` are appended after ``-TERM``, e.g. ``("-x", "dnsmasq")`` for
+    an exact process-name match or ``("-f", TFTP_PGREP_PATTERN)`` to match the
+    full command line. Exit codes 0 (matched) and 1 (no match) are both OK.
+    """
+    proc = run_privileged([pkill_path(), "-TERM", *pkill_args], ok_returncodes=(0, 1))
+    if proc is None:
+        return  # --dry-run already printed the command
+    print(f"OK: stopped {label}." if proc.returncode == 0 else f"OK: {label} was not running.")
 
 
 def privileged(func):
@@ -828,10 +845,7 @@ def dnsmasq_cmd_start(args: argparse.Namespace) -> int:
 
 @privileged
 def dnsmasq_cmd_stop(args: argparse.Namespace) -> int:
-    proc = run_privileged([pkill_path(), "-TERM", "-x", "dnsmasq"], ok_returncodes=(0, 1))
-    if proc is None:
-        return 0  # --dry-run already printed
-    print("OK: stopped dnsmasq." if proc.returncode == 0 else "OK: dnsmasq was not running.")
+    stop_process("dnsmasq", ["-x", "dnsmasq"])
     return 0
 
 
@@ -890,10 +904,7 @@ def tcpdump_cmd_capture(args: argparse.Namespace) -> int:
 
 @privileged
 def tcpdump_cmd_stop(args: argparse.Namespace) -> int:
-    proc = run_privileged([pkill_path(), "-TERM", "-x", "tcpdump"], ok_returncodes=(0, 1))
-    if proc is None:
-        return 0  # --dry-run already printed
-    print("OK: stopped tcpdump." if proc.returncode == 0 else "OK: tcpdump was not running.")
+    stop_process("tcpdump", ["-x", "tcpdump"])
     return 0
 
 
@@ -932,6 +943,12 @@ def tftp_cmd_serve(args: argparse.Namespace) -> int:
     return 0
 
 
+@privileged
+def tftp_cmd_stop(args: argparse.Namespace) -> int:
+    stop_process("TFTP server", ["-f", TFTP_PGREP_PATTERN])
+    return 0
+
+
 def register_tftp(subparsers) -> None:
     p = subparsers.add_parser("tftp", help="Serve a directory over TFTP (privileged).")
     sub = p.add_subparsers(dest="action", required=True, metavar="ACTION")
@@ -940,9 +957,22 @@ def register_tftp(subparsers) -> None:
     q.add_argument("--directory", required=True, metavar="DIR", help="Directory containing the firmware images.")
     q.set_defaults(func=tftp_cmd_serve)
 
+    q = sub.add_parser("stop", help="Stop any running TFTP server (privileged).")
+    q.set_defaults(func=tftp_cmd_stop)
+
 # ===========================================================================
-# Meta commands: sudoers / doctor
+# Meta commands: reset / sudoers / doctor
 # ===========================================================================
+
+@privileged
+def cmd_reset(args: argparse.Namespace) -> int:
+    """Stop every long-running service a previous agent-proxy run may have left behind."""
+    stop_process("TFTP server", ["-f", TFTP_PGREP_PATTERN])
+    stop_process("dnsmasq", ["-x", "dnsmasq"])
+    stop_process("tcpdump", ["-x", "tcpdump"])
+    print("OK: reset complete.")
+    return 0
+
 
 def cmd_sudoers(args: argparse.Namespace) -> int:
     user = args.user or current_user()
@@ -1050,6 +1080,7 @@ def build_parser() -> argparse.ArgumentParser:
             f"  {PROG} tcpdump capture --interface eth0 --expression 'port 67 or port 69' --count 50\n"
             f"  {PROG} tcpdump stop\n"
             f"  {PROG} tftp serve --directory ~/firmware\n"
+            f"  {PROG} reset        # stop tftp/dnsmasq/tcpdump left from a prior run\n"
             f"  {PROG} sudoers      # print the sudoers rule to install\n"
             f"  {PROG} doctor       # verify the setup\n"
         ),
@@ -1074,6 +1105,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("doctor", help="Check the environment and sudoers setup.")
     p.set_defaults(func=cmd_doctor)
+
+    p = sub.add_parser("reset", help="Stop all agent-proxy-started services (tftp/dnsmasq/tcpdump).")
+    p.set_defaults(func=cmd_reset)
 
     register_nmcli(sub)
     register_ip(sub)
