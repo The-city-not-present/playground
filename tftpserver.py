@@ -79,25 +79,39 @@ def main():
                         b"\x00\x03" + block.to_bytes(2, "big") + chunk, addr
                     )
                     last = len(chunk) < 512
-                    if last:
-                        break
+
+                    # Drain the ACK for this block -- including the final short
+                    # block -- so the client's final ACK can't leak back into
+                    # the main loop and be misread as an "Unknown opcode".
+                    ack_ok = False
                     try:
                         sock.settimeout(5)
                         ack, _ = sock.recvfrom(516)
-                        sock.settimeout(None)
                     except socket.timeout:
-                        print("[tftp] timeout waiting for ACK", flush=True)
-                        break
-                    if (
-                        len(ack) >= 4
-                        and ack[:2] == b"\x00\x04"
-                        and int.from_bytes(ack[2:4], "big") == block
-                    ):
-                        block += 1
+                        if not last:
+                            print("[tftp] timeout waiting for ACK", flush=True)
                     else:
+                        ack_ok = (
+                            len(ack) >= 4
+                            and ack[:2] == b"\x00\x04"
+                            and int.from_bytes(ack[2:4], "big") == block
+                        )
+                    finally:
+                        sock.settimeout(None)
+
+                    if last:
+                        # The transfer is complete once the short final block
+                        # is sent; the final ACK is only drained, not required.
                         break
+                    if not ack_ok:
+                        break
+                    block += 1
         elif op == OP_WRQ:
             sock.sendto(err_pkt(2, "Write not allowed"), addr)
+        elif op == OP_ACK:
+            # Stray or duplicate ACK (e.g. a retransmitted final ACK): ignore it
+            # instead of misreading it as an "Unknown opcode" request.
+            continue
         else:
             sock.sendto(err_pkt(4, "Unknown opcode"), addr)
 
